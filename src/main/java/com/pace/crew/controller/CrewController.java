@@ -10,6 +10,7 @@ import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.*;
 
+/** 크루 API의 입력과 응답을 담당하며 권한 판단은 서비스에 위임합니다. */
 @RestController
 @RequestMapping("/api/v1")
 public class CrewController {
@@ -19,16 +20,15 @@ public class CrewController {
 
     @GetMapping("/crews/rankings")
     public List<CrewRankingResponse> rankings(@AuthenticationPrincipal Jwt jwt,
-                                               @RequestParam(defaultValue = "week") String period) {
-        return service.rankings(jwt.getSubject(), period);
+                                               @org.springdoc.core.annotations.ParameterObject @ModelAttribute CrewPeriodQuery query) {
+        return service.rankings(jwt.getSubject(), query.period());
     }
 
+    /** 검색 조건을 DTO로 바인딩하되 쿼리 파라미터 이름은 유지합니다. */
     @GetMapping("/crews")
     public List<CrewSearchResponse> search(@AuthenticationPrincipal Jwt jwt,
-                                           @RequestParam(required = false) String query,
-                                           @RequestParam(required = false) String sido,
-                                           @RequestParam(required = false) String sigungu) {
-        return service.search(jwt.getSubject(), query, sido, sigungu);
+                                           @org.springdoc.core.annotations.ParameterObject @ModelAttribute CrewSearchQuery query) {
+        return service.search(jwt.getSubject(), query.query(), query.sido(), query.sigungu());
     }
 
     @GetMapping("/users/me/crew")
@@ -38,8 +38,8 @@ public class CrewController {
 
     @GetMapping("/crews/{crewId}")
     public CrewDetailResponse detail(@AuthenticationPrincipal Jwt jwt, @PathVariable String crewId,
-                                     @RequestParam(defaultValue = "week") String period) {
-        return service.detail(jwt.getSubject(), crewId, period);
+                                     @org.springdoc.core.annotations.ParameterObject @ModelAttribute CrewPeriodQuery query) {
+        return service.detail(jwt.getSubject(), crewId, query.period());
     }
 
     @PostMapping("/crews")
@@ -102,5 +102,4 @@ public class CrewController {
         return ResponseEntity.noContent().build();
     }
 
-    public record LeaderTransferRequest(@jakarta.validation.constraints.NotBlank String userId) {}
 }
