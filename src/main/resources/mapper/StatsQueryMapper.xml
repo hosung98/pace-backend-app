@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.pace.stats.mapper.StatsQueryMapper">
+    <select id="daily" resultType="com.pace.stats.mapper.DailyStatsRow">
+        SELECT (started_at AT TIME ZONE #{zone})::date AS day,
+               SUM(distance_meters) AS distance_meters,
+               SUM(duration_seconds) AS duration_seconds,
+               COUNT(*) AS run_count,
+               MAX(distance_meters) AS longest_run_meters
+        FROM runs
+        WHERE user_id = #{userId} AND deleted_at IS NULL
+          AND started_at &gt;= #{start} AND started_at &lt; #{end}
+        GROUP BY day
+        ORDER BY day
+    </select>
+    <select id="allTime" resultType="com.pace.stats.mapper.AggregateStatsRow">
+        SELECT COALESCE(SUM(distance_meters), 0) AS distance_meters,
+               COALESCE(SUM(duration_seconds), 0) AS duration_seconds,
+               COUNT(*) AS run_count,
+               COALESCE(MAX(distance_meters), 0) AS longest_run_meters
+        FROM runs
+        WHERE user_id = #{userId} AND deleted_at IS NULL
+    </select>
+</mapper>

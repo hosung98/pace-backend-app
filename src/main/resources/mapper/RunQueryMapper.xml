@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.pace.run.mapper.RunQueryMapper">
+    <select id="list" resultType="com.pace.run.mapper.RunRow">
+        SELECT id AS internal_id, public_id AS id, client_run_id, title, started_at, ended_at,
+               duration_seconds, distance_meters, average_pace_seconds_per_km, route_point_count
+        FROM runs
+        WHERE user_id = #{userId} AND deleted_at IS NULL
+        <if test="afterStart != null">
+            AND (started_at, id) &lt; (#{afterStart}, #{afterId})
+        </if>
+        ORDER BY started_at DESC, id DESC
+        LIMIT #{limit}
+    </select>
+</mapper>

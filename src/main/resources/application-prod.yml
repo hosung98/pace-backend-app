@@ -1,0 +1,5 @@
+spring:
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://${DB_HOST}:${DB_PORT:5432}/pace_prod}
+    username: ${DB_USERNAME}
+    password: ${DB_PASSWORD}
