@@ -11,6 +11,7 @@ import org.springframework.web.bind.annotation.*;
 import com.pace.run.dto.*;
 import com.pace.run.service.RunService;
 
+/** 러닝 요청을 검증하고 비즈니스 처리는 서비스에 위임합니다. */
 @RestController
 @RequestMapping("/api/v1/runs")
 @Tag(name = "러닝", description = "본인 기록 저장·조회·삭제·복구")
@@ -27,18 +28,19 @@ public class RunController {
                 .location(URI.create("/api/v1/runs/" + result.body().id())).body(result.body());
     }
 
+    /** 쿼리 문자열을 목록 DTO로 바인딩하며 기존 기본값을 유지합니다. */
     @GetMapping
     @Operation(summary = "러닝 목록", description = "시작 시각 내림차순 커서 페이지네이션입니다. 경로 데이터는 제외합니다.")
-    public RunListResponse list(@AuthenticationPrincipal Jwt jwt, @RequestParam(required = false) String cursor,
-                     @RequestParam(defaultValue = "20") int limit) {
-        return service.list(jwt.getSubject(), cursor, limit);
+    public RunListResponse list(@AuthenticationPrincipal Jwt jwt,
+                              @org.springdoc.core.annotations.ParameterObject @ModelAttribute RunListQuery query) {
+        return service.list(jwt.getSubject(), query.cursor(), query.limit());
     }
 
     @GetMapping("/{runId}")
     @Operation(summary = "러닝 상세", description = "route는 simplified(기본), full, none 중 선택합니다. 좌표는 [위도, 경도] 순서입니다.")
     public RunDetailResponse detail(@AuthenticationPrincipal Jwt jwt, @PathVariable String runId,
-                         @RequestParam(defaultValue = "simplified") String route) {
-        return service.detail(jwt.getSubject(), runId, route);
+                         @org.springdoc.core.annotations.ParameterObject @ModelAttribute RunDetailQuery query) {
+        return service.detail(jwt.getSubject(), runId, query.route());
     }
 
     @PatchMapping("/{runId}")

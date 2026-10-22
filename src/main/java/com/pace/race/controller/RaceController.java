@@ -3,7 +3,6 @@ package com.pace.race.controller;
 import com.pace.race.dto.*;
 import com.pace.race.service.RaceService;
 import jakarta.validation.Valid;
-import java.time.Instant;
 import java.util.List;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -11,6 +10,7 @@ import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.*;
 
+/** 대결 API의 요청 바인딩과 HTTP 응답을 담당합니다. */
 @RestController
 @RequestMapping("/api/v1/races")
 public class RaceController {
@@ -18,14 +18,12 @@ public class RaceController {
 
     public RaceController(RaceService service) { this.service = service; }
 
+    /** 목록 필터를 묶어 받고 대결 조회는 서비스에 위임합니다. */
     @GetMapping
     public List<RaceSummaryResponse> list(@AuthenticationPrincipal Jwt jwt,
-                                          @RequestParam(defaultValue = "open") String scope,
-                                          @RequestParam(required = false) Integer distanceMeters,
-                                          @RequestParam(required = false) Instant from,
-                                          @RequestParam(required = false) Instant to,
-                                          @RequestParam(defaultValue = "false") boolean hideFull) {
-        return service.list(jwt.getSubject(), scope, distanceMeters, from, to, hideFull);
+                                          @org.springdoc.core.annotations.ParameterObject @ModelAttribute RaceListQuery query) {
+        return service.list(jwt.getSubject(), query.scope(), query.distanceMeters(),
+                query.from(), query.to(), query.hideFull());
     }
 
     @GetMapping("/{raceId}")

@@ -59,6 +59,7 @@ class ApiIntegrationTest {
     @Autowired ObjectMapper json;
     @Autowired JdbcTemplate jdbc;
     @Autowired AccountCleanupScheduler cleanup;
+    @Autowired org.springframework.security.oauth2.jwt.JwtEncoder jwtEncoder;
     @MockitoBean GoogleVerifier google;
 
     @BeforeEach
@@ -109,6 +110,71 @@ class ApiIntegrationTest {
         assertThat(again.at("/user/id")).isEqualTo(first.at("/user/id"));
         mvc.perform(get("/api/v1/users/me").header("Authorization", bearer(first)))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.nickname").value("테스트 러너"));
+    }
+
+    /** 실제 필터 체인에서 서명과 필수 클레임 검증이 유지되는지 확인합니다. */
+    @Test
+    void 잘못된_JWT는_공통_인증오류로_응답한다() throws Exception {
+        JsonNode user = login("google-a");
+        String subject = user.at("/user/id").asText();
+        Instant now = Instant.now();
+        var valid = org.springframework.security.oauth2.jwt.JwtClaimsSet.builder()
+                .issuer("pace-api").subject(subject).audience(List.of("pace-app"))
+                .issuedAt(now).expiresAt(now.plusSeconds(1800)).build();
+        var expired = org.springframework.security.oauth2.jwt.JwtClaimsSet.builder()
+                .issuer("pace-api").subject(subject).audience(List.of("pace-app"))
+                .issuedAt(now.minusSeconds(600)).expiresAt(now.minusSeconds(300)).build();
+        for (var claims : List.of(
+                org.springframework.security.oauth2.jwt.JwtClaimsSet.from(valid).issuer("other-api").build(),
+                org.springframework.security.oauth2.jwt.JwtClaimsSet.from(valid).audience(List.of("other-app")).build(),
+                org.springframework.security.oauth2.jwt.JwtClaimsSet.from(valid).subject("unknown-user").build(),
+                org.springframework.security.oauth2.jwt.JwtClaimsSet.from(valid).subject(" ").build(),
+                org.springframework.security.oauth2.jwt.JwtClaimsSet.builder()
+                        .issuer("pace-api").subject(subject).audience(List.of("pace-app")).build())) {
+            mvc.perform(get("/api/v1/users/me").header("Authorization", "Bearer " + accessToken(claims)))
+                    .andExpect(status().isUnauthorized()).andExpect(header().string("WWW-Authenticate", "Bearer"))
+                    .andExpect(jsonPath("$.code").value("UNAUTHORIZED"))
+                    .andExpect(jsonPath("$.fieldErrors").isArray()).andExpect(jsonPath("$.requestId").isString());
+        }
+        mvc.perform(get("/api/v1/users/me").header("Authorization", "Bearer " + accessToken(expired)))
+                .andExpect(status().isUnauthorized()).andExpect(jsonPath("$.code").value("TOKEN_EXPIRED"));
+        String signed = accessToken(valid);
+        int signatureStart = signed.lastIndexOf('.') + 1;
+        String tampered = signed.substring(0, signatureStart)
+                + (signed.charAt(signatureStart) == 'A' ? "B" : "A") + signed.substring(signatureStart + 1);
+        for (String token : List.of("not-a-jwt", tampered)) {
+            mvc.perform(get("/api/v1/users/me").header("Authorization", "Bearer " + token))
+                    .andExpect(status().isUnauthorized()).andExpect(jsonPath("$.code").value("UNAUTHORIZED"));
+        }
+        mvc.perform(get("/actuator/health").header("Authorization", "Bearer " + "not-a-jwt"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    private String accessToken(org.springframework.security.oauth2.jwt.JwtClaimsSet claims) {
+        return jwtEncoder.encode(org.springframework.security.oauth2.jwt.JwtEncoderParameters.from(
+                org.springframework.security.oauth2.jwt.JwsHeader.with(
+                        org.springframework.security.oauth2.jose.jws.MacAlgorithm.HS256).build(), claims)).getTokenValue();
+    }
+
+    /** DTO 바인딩 이후에도 기본값·빈 값·타입 오류 응답이 호환되는지 확인합니다. */
+    @Test
+    void 조회_DTO는_기존_쿼리_파라미터를_유지한다() throws Exception {
+        String token = bearer(login("google-a"));
+        for (String path : List.of("/api/v1/runs", "/api/v1/runs?limit=",
+                "/api/v1/dashboard?timeZone=", "/api/v1/stats/running?period=&date=&timeZone=",
+                "/api/v1/crews?query=러너&sido=서울&sigungu=강남구", "/api/v1/crews/rankings?period=",
+                "/api/v1/races", "/api/v1/races?scope=&hideFull=",
+                "/api/v1/races?scope=open&distanceMeters=5000&from=2026-01-01T00:00:00Z&to=2027-01-01T00:00:00Z&hideFull=true")) {
+            mvc.perform(get(path).header("Authorization", token)).andExpect(status().isOk());
+        }
+        for (String path : List.of("/api/v1/runs?limit=abc", "/api/v1/runs?limit=0",
+                "/api/v1/stats/running?date=not-a-date", "/api/v1/stats/running?period=invalid",
+                "/api/v1/races?distanceMeters=abc", "/api/v1/races?from=not-an-instant",
+                "/api/v1/races?hideFull=invalid")) {
+            mvc.perform(get(path).header("Authorization", token)).andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.code").value("VALIDATION_ERROR"))
+                    .andExpect(jsonPath("$.fieldErrors").isArray());
+        }
     }
 
     @Test

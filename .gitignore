@@ -10,3 +10,31 @@
 !.env.example
 !.env.local.example
 *.log
+
+# 로컬 비밀 설정과 개인 인증서
+application-secrets.properties
+application-secrets.yml
+application-secrets.yaml
+application-credentials.properties
+application-credentials.yml
+application-credentials.yaml
+*.key
+*.pem
+*.p12
+*.pfx
+*.jks
+*.keystore
+
+# 빌드 중간 파일·편집기 임시 파일
+*.class
+*.tmp
+*.swp
+*.swo
+*~
+*.hprof
+hs_err_pid*
+/out/
+/bin/
+.classpath
+.project
+.settings/
