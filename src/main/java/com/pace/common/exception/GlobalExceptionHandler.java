@@ -2,11 +2,14 @@ package com.pace.common.exception;
 
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.ConstraintViolationException;
-import java.util.List;
-import java.util.Map;
+import com.pace.auth.security.SecurityErrorHandler;
+import jakarta.servlet.http.HttpServletResponse;
+import java.io.IOException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.security.access.AccessDeniedException;
+import org.springframework.security.core.AuthenticationException;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.validation.BindException;
@@ -20,27 +23,47 @@ import org.springframework.web.servlet.resource.NoResourceFoundException;
 import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.HttpMediaTypeNotSupportedException;
 
+/** MVC의 비즈니스·검증·보안 예외를 공통 오류 응답으로 변환합니다. */
 @RestControllerAdvice
 public class GlobalExceptionHandler {
     private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
+    private final SecurityErrorHandler securityErrors;
 
-    public static Map<String, Object> body(String code, String message, HttpServletRequest request) {
-        return Map.of("code", code, "message", message,
-                "requestId", String.valueOf(request.getAttribute("requestId")), "fieldErrors", List.of());
+    public GlobalExceptionHandler(SecurityErrorHandler securityErrors) {
+        this.securityErrors = securityErrors;
+    }
+
+    /** 서비스에서 발생한 인증 오류도 필터와 같은 형식으로 처리합니다. */
+    @ExceptionHandler(AuthenticationException.class)
+    void authentication(AuthenticationException ex, HttpServletRequest request,
+                        HttpServletResponse response) throws IOException {
+        securityErrors.commence(request, response, ex);
+    }
+
+    @ExceptionHandler(AccessDeniedException.class)
+    void denied(AccessDeniedException ex, HttpServletRequest request,
+                HttpServletResponse response) throws IOException {
+        securityErrors.handle(request, response, ex);
+    }
+
+    private static ApiError body(String code, String message, HttpServletRequest request) {
+        return ApiError.of(code, message, request);
     }
 
     @ExceptionHandler(BusinessException.class)
     ResponseEntity<?> business(BusinessException ex, HttpServletRequest request) {
-        return ResponseEntity.status(ex.status).body(body(ex.code, ex.getMessage(), request));
+        var response = ResponseEntity.status(ex.status);
+        if (ex.status.value() == 401) response.header("WWW-Authenticate", "Bearer");
+        return response.body(body(ex.code, ex.getMessage(), request));
     }
 
     @ExceptionHandler(BindException.class)
     ResponseEntity<?> validation(BindException ex, HttpServletRequest request) {
-        return ResponseEntity.badRequest().body(Map.of(
-                "code", "VALIDATION_ERROR", "message", "요청 값을 확인해 주세요.",
-                "requestId", String.valueOf(request.getAttribute("requestId")),
-                "fieldErrors", ex.getFieldErrors().stream().map(error -> Map.of(
-                        "field", error.getField(), "reason", String.valueOf(error.getDefaultMessage()))).toList()));
+        return ResponseEntity.badRequest().body(new ApiError(
+                "VALIDATION_ERROR", "요청 값을 확인해 주세요.",
+                String.valueOf(request.getAttribute("requestId")),
+                ex.getFieldErrors().stream().map(error -> new ApiError.FieldError(
+                        error.getField(), String.valueOf(error.getDefaultMessage()))).toList()));
     }
 
     @ExceptionHandler({HttpMessageNotReadableException.class, ConstraintViolationException.class,

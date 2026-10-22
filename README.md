@@ -27,6 +27,9 @@ src/main/java/com/pace/
     filter/                 요청 ID 발급과 MDC 설정
     util/                   JSON·해시·시간대 처리
   auth/                     인증 도메인
+    filter/                 JWT 인증·보안 예외 필터 (보안 체인에서만 등록)
+    provider/               Google 검증·JWT 인증 Provider
+    security/               인증 실패·권한 거부 공통 응답
   user/                     사용자·설정 도메인
   run/                      러닝 도메인
   stats/                    집계 도메인
@@ -45,6 +48,73 @@ Mapper의 Row는 조회 결과를 표현합니다.
 - MyBatis Mapper / XML: 커서 목록·통계 SQL 및 가입 동시성 잠금
 - 같은 DataSource와 JPA 트랜잭션 관리자를 사용합니다. JPA 변경 직후 MyBatis로
   조회할 때는 먼저 flush해야 합니다.
+
+### 조회 DTO와 요청 호환성
+
+기존 도메인별 계층 구조를 유지하며 HTTP 바인딩 객체는 각 도메인의 `dto`에 둡니다.
+컨트롤러 내부의 크루장 양도 요청도 `LeaderTransferRequest` DTO로 분리합니다.
+엔티티를 HTTP 요청 객체로 사용하거나 컨트롤러에서 Repository를 직접 호출하지 않습니다.
+
+조회 조건은 불변 record와 `@ModelAttribute`로 받습니다. JSON 본문으로 변경하지 않으며
+URL·쿼리 파라미터 이름·응답 필드와 기존 기본값을 유지합니다.
+OpenAPI에는 `@ParameterObject`로 개별 쿼리 파라미터를 표시합니다.
+
+| 조회 | DTO | 생략 또는 빈 값의 기본값 |
+|---|---|---|
+| 러닝 목록 | `RunListQuery` | `limit=20` |
+| 러닝 상세 | `RunDetailQuery` | `route=simplified` |
+| 대시보드 | `DashboardQuery` | `timeZone=Asia/Seoul` |
+| 러닝 통계 | `RunningStatsQuery` | `period=week`, `timeZone=Asia/Seoul` |
+| 크루 검색 | `CrewSearchQuery` | 선택 조건은 그대로 전달 |
+| 크루 순위·상세 | `CrewPeriodQuery` | `period=week` |
+| 대결 목록 | `RaceListQuery` | `scope=open`, `hideFull=false` |
+
+날짜·숫자·불리언 변환 실패는 400으로 처리합니다. 기간·거리·페이지 크기 등의
+비즈니스 유효성 검증은 기존 Service에 남겨 HTTP 이외의 호출에도 동일하게 적용합니다.
+경로 ID·인증 주체·멱등성 헤더는 의미가 다른 입력이므로 조회 DTO에 섞지 않습니다.
+
+### 인증 및 전역 예외 처리
+
+보안 체인의 핵심 순서는 다음과 같습니다. 요청 ID는 체인 밖의 `RequestIdFilter`가 먼저 발급합니다.
+
+1. `SecurityExceptionFilter`: 하위 필터에서 전파된 인증·인가 예외만 처리합니다.
+2. `JwtAuthenticationFilter`: Spring Security의 표준 토큰 추출과 SecurityContext 처리를 재사용합니다.
+3. `ProviderManager` → `JwtTokenProvider`: `JwtDecoder`의 HS256 서명·발급자 `pace-api`·대상
+   `pace-app`·만료 및 필수 클레임 검증 후 활성 사용자인지 확인합니다.
+4. `AuthenticatedUserMdcFilter`: 인증 사용자 ID를 로깅 컨텍스트에 넣고 요청 종료 시 정리합니다.
+5. Spring Security 인가 필터: 공개 경로를 제외한 모든 요청에 인증을 요구합니다.
+
+사용자 정의 필터는 서블릿 필터 Bean으로 중복 등록하지 않고 `SecurityFilterChain`에만 추가합니다.
+세션은 만들지 않으며 쿠키 인증이 아닌 Authorization 헤더 기반 API이므로 CSRF를 비활성화합니다.
+일반 서버 예외를 인증 실패로 위장하지 않으며 응답이 이미 전송됐다면 오류 본문을 덧붙이지 않습니다.
+
+`SecurityErrorHandler`는 `AuthenticationEntryPoint`와 `AccessDeniedHandler`를 구현합니다.
+인증 실패는 401 및 `WWW-Authenticate: Bearer`, 권한 부족은 403을 반환합니다.
+MVC 밖의 필터 오류는 Advice가 잡을 수 없으므로 이 핸들러로 처리하고,
+MVC 안의 인증·인가 예외는 `GlobalExceptionHandler`에서 같은 핸들러로 위임합니다.
+
+공통 `ApiError`는 기존 `code`, `message`, `requestId`, `fieldErrors` 필드를 유지합니다.
+`BusinessException`은 업무 오류의 상태와 코드를 보존하고, 바인딩 오류는 400,
+DB 제약 충돌은 409, 예상하지 못한 예외는 상세 내용을 노출하지 않는 500으로 처리합니다.
+필드 검증 실패의 `fieldErrors`에는 `field`와 `reason`만 포함하고 입력 원문은 반환하지 않습니다.
+
+### 정리 대상과 민감 정보
+
+현재 추적 파일에는 빌드 산출물·IDE 설정·개인 인증서가 없어 삭제할 파일은 없습니다.
+개발 환경에 생성된 다음 항목은 필요 시 정리하고 Git에는 추가하지 않습니다.
+
+- `build/`, `target/`, `.gradle/`, `out/`, `bin/`, `*.class`: 빌드 및 캐시
+- `.idea/`, `.vscode/`, `*.iml`, `.classpath`, `.project`, `.settings/`: 개인 IDE 설정
+- `*.log`, `*.tmp`, `*.swp`, `*.swo`, `*~`, `*.hprof`, `hs_err_pid*`: 로그·임시 파일·메모리 덤프
+- `.env`, `.env.*`, `application-secrets.*`, `application-credentials.*`: 개인 비밀 설정
+- `*.key`, `*.pem`, `*.p12`, `*.pfx`, `*.jks`, `*.keystore`: 개인 키·인증서
+
+위 항목은 `.gitignore`로 제외하며 값 없는 `.env.example`, `.env.local.example`은 유지합니다.
+Gradle Wrapper와 `database/` SQL, 비밀 값 없는 공용 프로필 YAML은 삭제하지 않습니다.
+`application.yml`과 공용 프로필의 DB 비밀번호·JWT 키 등은 이미 환경 변수 참조로 분리되어 있습니다.
+실제 값은 실행 환경 또는 Secret Manager로 주입하고, 개인 설정은 제외된 파일에만 보관합니다.
+`.gitignore`는 이미 추적된 파일이나 과거 커밋의 비밀을 제거하지 않습니다.
+노출 이력이 있다면 해당 자격 증명을 먼저 폐기·교체하고 별도로 저장소 이력을 정리해야 합니다.
 
 ## DB 준비 (DBeaver 수동 실행)
 

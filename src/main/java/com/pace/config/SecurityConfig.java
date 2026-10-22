@@ -1,9 +1,11 @@
 package com.pace.config;
 
 import com.nimbusds.jose.jwk.source.ImmutableSecret;
-import com.pace.common.exception.GlobalExceptionHandler;
+import com.pace.auth.filter.JwtAuthenticationFilter;
+import com.pace.auth.filter.SecurityExceptionFilter;
+import com.pace.auth.provider.JwtTokenProvider;
+import com.pace.auth.security.SecurityErrorHandler;
 import com.pace.common.filter.AuthenticatedUserMdcFilter;
-import com.pace.common.util.JsonCodec;
 import java.security.SecureRandom;
 import java.util.Arrays;
 import java.util.Base64;
@@ -17,6 +19,7 @@ import org.springframework.core.env.Environment;
 import org.springframework.core.env.Profiles;
 import org.springframework.http.HttpMethod;
 import com.pace.user.repository.UserRepository;
+import org.springframework.security.authentication.ProviderManager;
 import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
@@ -29,8 +32,10 @@ import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
+/** 무상태 JWT 인증과 명시적인 공개 경로·CORS 정책을 구성합니다. */
 @Configuration
 public class SecurityConfig {
+    /** 운영에서는 외부 주입 키만 허용하고 로컬에서만 임시 키를 생성합니다. */
     @Bean
     SecretKeySpec jwtKey(@Value("${pace.jwt-secret}") String secret, Environment environment) {
         byte[] bytes;
@@ -58,22 +63,30 @@ public class SecurityConfig {
     }
 
     @Bean
-    JwtDecoder jwtDecoder(SecretKeySpec key, UserRepository users) {
+    JwtDecoder jwtDecoder(SecretKeySpec key) {
         var decoder = NimbusJwtDecoder.withSecretKey(key).macAlgorithm(MacAlgorithm.HS256).build();
-        OAuth2TokenValidator<Jwt> activeUser = jwt -> {
-            boolean active = jwt.getSubject() != null && users.existsByPublicIdAndStatus(jwt.getSubject(), "active");
-            return active && jwt.getAudience().contains("pace-app") && jwt.getExpiresAt() != null
+        OAuth2TokenValidator<Jwt> requiredClaims = jwt -> {
+            return jwt.getSubject() != null && !jwt.getSubject().isBlank()
+                    && jwt.getAudience().contains("pace-app") && jwt.getExpiresAt() != null
                     ? OAuth2TokenValidatorResult.success()
                     : OAuth2TokenValidatorResult.failure(new OAuth2Error("invalid_token", "유효하지 않은 토큰입니다.", null));
         };
         decoder.setJwtValidator(new DelegatingOAuth2TokenValidator<>(
-                JwtValidators.createDefaultWithIssuer("pace-api"), activeUser));
+                JwtValidators.createDefaultWithIssuer("pace-api"), requiredClaims));
         return decoder;
     }
 
     @Bean
-    SecurityFilterChain security(HttpSecurity http, JsonCodec json,
+    JwtTokenProvider jwtTokenProvider(JwtDecoder decoder, UserRepository users) {
+        return new JwtTokenProvider(decoder, users);
+    }
+
+    /** 예외 필터 → JWT 인증 → 사용자 MDC → 인가 순서로 필터를 배치합니다. */
+    @Bean
+    SecurityFilterChain security(HttpSecurity http, JwtTokenProvider provider, SecurityErrorHandler errors,
                                  @Value("${springdoc.api-docs.enabled:false}") boolean docs) throws Exception {
+        var jwtFilter = new JwtAuthenticationFilter(new ProviderManager(provider));
+        jwtFilter.setAuthenticationEntryPoint(errors);
         http.csrf(csrf -> csrf.disable())
                 .cors(Customizer.withDefaults())
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
@@ -85,31 +98,11 @@ public class SecurityConfig {
                     }
                     auth.anyRequest().authenticated();
                 })
-                .oauth2ResourceServer(resource -> resource.jwt(Customizer.withDefaults())
-                        .authenticationEntryPoint((request, response, ex) -> {
-                            response.setStatus(401);
-                            response.setContentType("application/json;charset=UTF-8");
-                            response.setHeader("WWW-Authenticate", "Bearer");
-                            boolean expired = ex.getMessage() != null
-                                    && ex.getMessage().toLowerCase(java.util.Locale.ROOT).contains("expired");
-                            response.getWriter().write(json.write(GlobalExceptionHandler.body(
-                                    expired ? "TOKEN_EXPIRED" : "UNAUTHORIZED",
-                                    "유효한 접근 토큰이 필요합니다.", request)));
-                        }))
-                .exceptionHandling(errors -> errors
-                        .authenticationEntryPoint((request, response, ex) -> {
-                            response.setStatus(401);
-                            response.setContentType("application/json;charset=UTF-8");
-                            response.setHeader("WWW-Authenticate", "Bearer");
-                            response.getWriter().write(json.write(GlobalExceptionHandler.body(
-                                    "UNAUTHORIZED", "로그인이 필요합니다.", request)));
-                        })
-                        .accessDeniedHandler((request, response, ex) -> {
-                            response.setStatus(403);
-                            response.setContentType("application/json;charset=UTF-8");
-                            response.getWriter().write(json.write(GlobalExceptionHandler.body(
-                                    "FORBIDDEN", "접근 권한이 없습니다.", request)));
-                        }))
+                .exceptionHandling(exceptions -> exceptions
+                        .authenticationEntryPoint(errors)
+                        .accessDeniedHandler(errors))
+                .addFilterAt(jwtFilter, BearerTokenAuthenticationFilter.class)
+                .addFilterBefore(new SecurityExceptionFilter(errors), BearerTokenAuthenticationFilter.class)
                 .addFilterAfter(new AuthenticatedUserMdcFilter(), BearerTokenAuthenticationFilter.class);
         return http.build();
     }
