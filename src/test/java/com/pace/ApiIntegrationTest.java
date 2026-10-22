@@ -47,6 +47,8 @@ class ApiIntegrationTest {
         try {
             var pg = EmbeddedPostgres.builder().setPort(0).start();
             new ResourceDatabasePopulator(new FileSystemResource("database/schema.sql")).execute(pg.getPostgresDatabase());
+            new ResourceDatabasePopulator(new FileSystemResource("database/community-schema.sql"))
+                    .execute(pg.getPostgresDatabase());
             return pg;
         } catch (IOException ex) {
             throw new IllegalStateException("테스트 PostgreSQL을 시작할 수 없습니다.", ex);
@@ -64,6 +66,7 @@ class ApiIntegrationTest {
         jdbc.execute("TRUNCATE users CASCADE");
         when(google.verify("google-a")).thenReturn(new GoogleVerifier.Identity("subject-a", "테스트 러너"));
         when(google.verify("google-b")).thenReturn(new GoogleVerifier.Identity("subject-b", "다른 러너"));
+        when(google.verify("google-c")).thenReturn(new GoogleVerifier.Identity("subject-c", "세 번째 러너"));
     }
 
     @AfterAll
@@ -239,5 +242,184 @@ class ApiIntegrationTest {
                 .andExpect(jsonPath("$.totals.runCount").value(0));
         mvc.perform(get("/api/v1/dashboard").header("Authorization", token)).andExpect(status().isOk())
                 .andExpect(jsonPath("$.week.dailyDistances.length()").value(7));
+    }
+
+    @Test
+    void 크루_생성_검색_실제기록_가입신청_승인_권한_양도와_쿨다운() throws Exception {
+        JsonNode leader = login("google-a");
+        JsonNode applicant = login("google-b");
+        String leaderToken = bearer(leader);
+        String applicantToken = bearer(applicant);
+        JsonNode created = json.readTree(mvc.perform(post("/api/v1/crews").header("Authorization", leaderToken)
+                        .contentType("application/json")
+                        .content(json.writeValueAsString(Map.of("name", "아침 러너", "intro", "한강에서 달려요",
+                                "region", Map.of("sido", "서울", "sigungu", "영등포구")))))
+                .andExpect(status().isCreated()).andReturn().getResponse().getContentAsString());
+        String crewId = created.get("id").asText();
+        mvc.perform(get("/api/v1/users/me/crew").header("Authorization", leaderToken))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.crewId").value(crewId));
+        mvc.perform(get("/api/v1/crews").header("Authorization", applicantToken).param("query", "아침")
+                        .param("sido", "서울").param("sigungu", "영등포구"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$[0].id").value(crewId))
+                .andExpect(jsonPath("$[0].weekDistanceMeters").value(0))
+                .andExpect(jsonPath("$[0].isMine").value(false));
+        mvc.perform(get("/api/v1/crews/rankings").header("Authorization", applicantToken).param("period", "week"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$[0].id").value(crewId))
+                .andExpect(jsonPath("$[0].distanceMeters").value(0))
+                .andExpect(jsonPath("$[0].isMine").value(false));
+        mvc.perform(post("/api/v1/crews/" + crewId + "/join-requests").header("Authorization", applicantToken))
+                .andExpect(status().isNoContent());
+        mvc.perform(post("/api/v1/crews/" + crewId + "/join-requests").header("Authorization", applicantToken))
+                .andExpect(status().isNoContent());
+        mvc.perform(get("/api/v1/crews/" + crewId + "/join-requests").header("Authorization", applicantToken))
+                .andExpect(status().isForbidden());
+        mvc.perform(get("/api/v1/crews/" + crewId + "/join-requests").header("Authorization", leaderToken))
+                .andExpect(status().isOk()).andExpect(jsonPath("$[0].userId").value(applicant.at("/user/id").asText()));
+        mvc.perform(post("/api/v1/crews/" + crewId + "/join-requests/" + applicant.at("/user/id").asText()
+                        + "/approve").header("Authorization", leaderToken))
+                .andExpect(status().isNoContent());
+        mvc.perform(get("/api/v1/crews/" + crewId + "?period=week").header("Authorization", applicantToken))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.membership").value("member"))
+                .andExpect(jsonPath("$.inviteCode").isEmpty()).andExpect(jsonPath("$.pendingRequestCount").value(0))
+                .andExpect(jsonPath("$.members.length()").value(2));
+        save(leaderToken, run("crew-real-run", Instant.now().toString(), 4200, 0), 201);
+        mvc.perform(get("/api/v1/crews/" + crewId + "?period=week").header("Authorization", leaderToken))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.distanceMeters").value(4200))
+                .andExpect(jsonPath("$.members[0].distanceMeters").value(4200))
+                .andExpect(jsonPath("$.members[0].runCount").value(1))
+                .andExpect(jsonPath("$.members[0].isMe").value(true));
+        mvc.perform(post("/api/v1/crews/" + crewId + "/leader").header("Authorization", leaderToken)
+                        .contentType("application/json")
+                        .content(json.writeValueAsString(Map.of("userId", applicant.at("/user/id").asText()))))
+                .andExpect(status().isNoContent());
+        mvc.perform(delete("/api/v1/crews/" + crewId + "/members/me").header("Authorization", leaderToken))
+                .andExpect(status().isNoContent());
+        mvc.perform(delete("/api/v1/crews/" + crewId + "/members/me").header("Authorization", applicantToken))
+                .andExpect(status().isNoContent());
+        mvc.perform(get("/api/v1/users/me/crew").header("Authorization", applicantToken))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.crewId").isEmpty());
+        mvc.perform(post("/api/v1/crews").header("Authorization", applicantToken).contentType("application/json")
+                        .content("{\"name\":\"다른 크루\",\"intro\":\"\",\"region\":null}"))
+                .andExpect(status().isConflict()).andExpect(jsonPath("$.code").value("CONFLICT"));
+    }
+
+    @Test
+    void 크루_초대코드_가입과_리더전용_재발급() throws Exception {
+        JsonNode leader = login("google-a");
+        JsonNode member = login("google-b");
+        String leaderToken = bearer(leader);
+        String memberToken = bearer(member);
+        JsonNode created = json.readTree(mvc.perform(post("/api/v1/crews").header("Authorization", leaderToken)
+                        .contentType("application/json")
+                        .content("{\"name\":\"초대 크루\",\"intro\":\"코드 가입\",\"region\":null}"))
+                .andExpect(status().isCreated()).andReturn().getResponse().getContentAsString());
+        String crewId = created.get("id").asText();
+        mvc.perform(post("/api/v1/crews/" + crewId + "/invite-code").header("Authorization", memberToken))
+                .andExpect(status().isForbidden());
+        JsonNode code = json.readTree(mvc.perform(post("/api/v1/crews/" + crewId + "/invite-code")
+                        .header("Authorization", leaderToken))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString());
+        assertThat(code.get("inviteCode").asText()).matches("[A-HJ-NP-Z2-9]{8}");
+        mvc.perform(post("/api/v1/crews/join-by-code").header("Authorization", memberToken)
+                        .contentType("application/json")
+                        .content(json.writeValueAsString(Map.of("code", code.get("inviteCode").asText()))))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.id").value(crewId));
+    }
+
+    @Test
+    void 대결_공개_비공개_정원_참가_초대코드와_자동마감() throws Exception {
+        JsonNode host = login("google-a");
+        JsonNode runner = login("google-b");
+        String hostToken = bearer(host);
+        String runnerToken = bearer(runner);
+        String startsAt = Instant.now().plusSeconds(7200).toString();
+        JsonNode created = json.readTree(mvc.perform(post("/api/v1/races").header("Authorization", hostToken)
+                        .contentType("application/json")
+                        .content(json.writeValueAsString(Map.of("title", "저녁 5km", "distanceMeters", 5000,
+                                "startsAt", startsAt, "joinDeadlineMinutes", 30, "minParticipants", 2,
+                                "maxParticipants", 2, "visibility", "public"))))
+                .andExpect(status().isCreated()).andReturn().getResponse().getContentAsString());
+        String raceId = created.get("id").asText();
+        mvc.perform(get("/api/v1/races/" + raceId).header("Authorization", hostToken))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.isHost").value(true))
+                .andExpect(jsonPath("$.isJoined").value(true)).andExpect(jsonPath("$.participantCount").value(1))
+                .andExpect(jsonPath("$.participants[0].isHost").value(true))
+                .andExpect(jsonPath("$.participants[0].isMe").value(true))
+                .andExpect(jsonPath("$.participants[0].result").value(org.hamcrest.Matchers.nullValue()));
+        mvc.perform(post("/api/v1/races/" + raceId + "/participants").header("Authorization", runnerToken))
+                .andExpect(status().isNoContent());
+        mvc.perform(delete("/api/v1/races/" + raceId + "/participants/me").header("Authorization", runnerToken))
+                .andExpect(status().isNoContent());
+        mvc.perform(get("/api/v1/races/" + raceId).header("Authorization", hostToken))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.participantCount").value(1));
+        mvc.perform(post("/api/v1/races/" + raceId + "/participants").header("Authorization", runnerToken))
+                .andExpect(status().isNoContent());
+        JsonNode detail = json.readTree(mvc.perform(get("/api/v1/races/" + raceId).header("Authorization", runnerToken))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.isJoined").value(true))
+                .andExpect(jsonPath("$.isHost").value(false)).andExpect(jsonPath("$.participantCount").value(2))
+                .andReturn().getResponse().getContentAsString());
+        assertThat(detail.at("/participants/1/isMe").asBoolean()).isTrue();
+        mvc.perform(get("/api/v1/races").header("Authorization", runnerToken).param("scope", "open")
+                        .param("distanceMeters", "5000").param("from", Instant.now().toString())
+                        .param("to", Instant.now().plusSeconds(10800).toString()).param("hideFull", "true"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$[0].id").value(raceId))
+                .andExpect(jsonPath("$[0].isJoined").value(true));
+        JsonNode privateRace = json.readTree(mvc.perform(post("/api/v1/races").header("Authorization", hostToken)
+                        .contentType("application/json")
+                        .content(json.writeValueAsString(Map.of("title", "초대 하프", "distanceMeters", 21097,
+                                "startsAt", startsAt, "joinDeadlineMinutes", 60, "minParticipants", 2,
+                                "maxParticipants", 6, "visibility", "private"))))
+                .andExpect(status().isCreated()).andReturn().getResponse().getContentAsString());
+        String privateId = privateRace.get("id").asText();
+        mvc.perform(get("/api/v1/races/" + privateId).header("Authorization", runnerToken))
+                .andExpect(status().isNotFound());
+        mvc.perform(post("/api/v1/races/" + privateId + "/participants").header("Authorization", runnerToken))
+                .andExpect(status().isNotFound());
+        JsonNode privateDetail = json.readTree(mvc.perform(get("/api/v1/races/" + privateId).header("Authorization", hostToken))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString());
+        assertThat(privateDetail.get("inviteCode").asText()).matches("[A-HJ-NP-Z2-9]{8}");
+        mvc.perform(post("/api/v1/races/join-by-code").header("Authorization", runnerToken)
+                        .contentType("application/json")
+                        .content(json.writeValueAsString(Map.of("code", privateDetail.get("inviteCode").asText()))))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.id").value(privateId));
+        JsonNode third = login("google-c");
+        mvc.perform(post("/api/v1/races/" + raceId + "/participants").header("Authorization", bearer(third)))
+                .andExpect(status().isConflict());
+        mvc.perform(post("/api/v1/races/" + raceId + "/cancel").header("Authorization", runnerToken))
+                .andExpect(status().isForbidden());
+        mvc.perform(post("/api/v1/races/" + raceId + "/cancel").header("Authorization", hostToken))
+                .andExpect(status().isNoContent());
+    }
+
+    @Test
+    void 대결_허용값_검증과_마감_시점_인원은_계정삭제에도_고정() throws Exception {
+        JsonNode host = login("google-a");
+        JsonNode runner = login("google-b");
+        String hostToken = bearer(host);
+        String runnerToken = bearer(runner);
+        String startsAt = Instant.now().plusSeconds(7200).toString();
+        mvc.perform(post("/api/v1/races").header("Authorization", hostToken).contentType("application/json")
+                        .content(json.writeValueAsString(Map.of("title", "잘못된 거리", "distanceMeters", 4000,
+                                "startsAt", startsAt, "joinDeadlineMinutes", 30, "minParticipants", 2,
+                                "maxParticipants", 4, "visibility", "public"))))
+                .andExpect(status().isBadRequest());
+        JsonNode created = json.readTree(mvc.perform(post("/api/v1/races").header("Authorization", hostToken)
+                        .contentType("application/json")
+                        .content(json.writeValueAsString(Map.of("title", "최소 인원 미달", "distanceMeters", 3000,
+                                "startsAt", startsAt, "joinDeadlineMinutes", 30, "minParticipants", 3,
+                                "maxParticipants", 6, "visibility", "public"))))
+                .andExpect(status().isCreated()).andReturn().getResponse().getContentAsString());
+        String raceId = created.get("id").asText();
+        mvc.perform(post("/api/v1/races/" + raceId + "/participants").header("Authorization", runnerToken))
+                .andExpect(status().isNoContent());
+        Long runnerId = jdbc.queryForObject("SELECT id FROM users WHERE public_id=?",
+                Long.class, runner.at("/user/id").asText());
+        jdbc.update("UPDATE races SET starts_at=now() WHERE public_id=?", raceId);
+        mvc.perform(delete("/api/v1/races/" + raceId + "/participants/me").header("Authorization", runnerToken))
+                .andExpect(status().isConflict());
+        jdbc.update("DELETE FROM users WHERE id=?", runnerId);
+        mvc.perform(get("/api/v1/races/" + raceId).header("Authorization", hostToken))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.cancelled").value(true))
+                .andExpect(jsonPath("$.participantCount").value(2));
     }
 }
