@@ -48,6 +48,9 @@ springdoc:
 pace:
   jwt-secret: ${JWT_SECRET}
   google-client-ids: ${GOOGLE_CLIENT_IDS}
+  apple-client-ids: ${APPLE_CLIENT_IDS:com.hocompany.pace}
+  apple-client-id: ${APPLE_CLIENT_ID:com.hocompany.pace}
+  apple-client-secret: ${APPLE_CLIENT_SECRET:}
   cors-origins: ${CORS_ORIGINS:}
 mybatis:
   mapper-locations: classpath:mapper/*.xml

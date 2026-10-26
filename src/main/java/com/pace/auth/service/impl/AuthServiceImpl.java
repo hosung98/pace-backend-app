@@ -9,6 +9,7 @@ import com.pace.auth.dto.*;
 import com.pace.auth.entity.*;
 import com.pace.auth.mapper.AuthLockMapper;
 import com.pace.auth.provider.GoogleVerifier;
+import com.pace.auth.provider.AppleVerifier;
 import com.pace.auth.repository.*;
 import com.pace.auth.service.AuthService;
 import java.security.SecureRandom;
@@ -30,11 +31,12 @@ public class AuthServiceImpl implements AuthService {
     private final TransactionTemplate tx;
     private final JwtEncoder encoder;
     private final GoogleVerifier google;
+    private final AppleVerifier apple;
     private final SecureRandom random = new SecureRandom();
 
     public AuthServiceImpl(UserRepository users, SettingsRepository settings, ProviderRepository providers,
                        TokenRepository tokens, AuthLockMapper locks, TransactionTemplate tx,
-                       JwtEncoder encoder, GoogleVerifier google) {
+                       JwtEncoder encoder, GoogleVerifier google, AppleVerifier apple) {
         this.users = users;
         this.settings = settings;
         this.providers = providers;
@@ -43,17 +45,32 @@ public class AuthServiceImpl implements AuthService {
         this.tx = tx;
         this.encoder = encoder;
         this.google = google;
+        this.apple = apple;
     }
 
     public AuthTokenResponse login(String idToken) {
         var identity = google.verify(idToken);
+        return loginIdentity("google", identity.subject(), identity.name());
+    }
+
+    public AuthTokenResponse loginApple(String idToken, String nonce, String nickname) {
+        if (nickname != null && (nickname.strip().length() < 2 || nickname.length() > 30)) {
+            throw BusinessException.invalid("닉네임은 공백을 제외하고 2~30자여야 합니다.");
+        }
+        var identity = apple.verify(idToken, nonce);
+        return loginIdentity("apple", identity.subject(), nickname);
+    }
+
+    private AuthTokenResponse loginIdentity(String providerName, String subject, String nickname) {
         return tx.execute(status -> {
-            locks.lockGoogleSubject(identity.subject());
-            var provider = providers.findByProviderAndProviderUserId("google", identity.subject());
+            // 기존 Google 잠금 키를 유지해 구·신 버전이 함께 실행될 때도 가입을 직렬화합니다.
+            if (providerName.equals("google")) locks.lockGoogleSubject(subject);
+            else locks.lockSocialSubject(providerName, subject);
+            var provider = providers.findByProviderAndProviderUserId(providerName, subject);
             boolean isNew = provider.isEmpty();
             User user;
             if (isNew) {
-                String name = identity.name() == null ? "러너" : identity.name().strip();
+                String name = nickname == null ? "러너" : nickname.strip();
                 if (name.length() < 2) name = "러너";
                 if (name.length() > 30) {
                     int end = Character.isHighSurrogate(name.charAt(29)) ? 29 : 30;
@@ -61,7 +78,7 @@ public class AuthServiceImpl implements AuthService {
                 }
                 user = users.saveAndFlush(new User(name));
                 settings.save(new UserSettings(user.getId()));
-                providers.save(new AuthProvider(user.getId(), identity.subject()));
+                providers.save(new AuthProvider(user.getId(), providerName, subject));
             } else {
                 user = activeUser(provider.get().getUserId());
                 provider.get().login();

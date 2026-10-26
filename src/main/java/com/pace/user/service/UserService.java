@@ -7,5 +7,5 @@ public interface UserService {
     MeResponse update(String subject, UpdateProfileRequest request);
     SettingsResponse settings(String subject);
     SettingsResponse updateSettings(String subject, UpdateSettingsRequest request);
-    void delete(String subject);
+    void delete(String subject, DeleteAccountRequest request);
 }

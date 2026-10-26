@@ -4,6 +4,7 @@ import com.pace.crew.dto.*;
 import com.pace.crew.service.CrewService;
 import jakarta.validation.Valid;
 import java.util.List;
+import org.springdoc.core.annotations.ParameterObject;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -20,14 +21,14 @@ public class CrewController {
 
     @GetMapping("/crews/rankings")
     public List<CrewRankingResponse> rankings(@AuthenticationPrincipal Jwt jwt,
-                                               @org.springdoc.core.annotations.ParameterObject @ModelAttribute CrewPeriodQuery query) {
+                                               @ParameterObject @ModelAttribute CrewPeriodQuery query) {
         return service.rankings(jwt.getSubject(), query.period());
     }
 
     /** 검색 조건을 DTO로 바인딩하되 쿼리 파라미터 이름은 유지합니다. */
     @GetMapping("/crews")
     public List<CrewSearchResponse> search(@AuthenticationPrincipal Jwt jwt,
-                                           @org.springdoc.core.annotations.ParameterObject @ModelAttribute CrewSearchQuery query) {
+                                           @ParameterObject @ModelAttribute CrewSearchQuery query) {
         return service.search(jwt.getSubject(), query.query(), query.sido(), query.sigungu());
     }
 
@@ -38,7 +39,7 @@ public class CrewController {
 
     @GetMapping("/crews/{crewId}")
     public CrewDetailResponse detail(@AuthenticationPrincipal Jwt jwt, @PathVariable String crewId,
-                                     @org.springdoc.core.annotations.ParameterObject @ModelAttribute CrewPeriodQuery query) {
+                                     @ParameterObject @ModelAttribute CrewPeriodQuery query) {
         return service.detail(jwt.getSubject(), crewId, query.period());
     }
 

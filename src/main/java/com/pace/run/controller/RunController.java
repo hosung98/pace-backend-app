@@ -4,6 +4,7 @@ import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import java.net.URI;
+import org.springdoc.core.annotations.ParameterObject;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
@@ -32,14 +33,14 @@ public class RunController {
     @GetMapping
     @Operation(summary = "러닝 목록", description = "시작 시각 내림차순 커서 페이지네이션입니다. 경로 데이터는 제외합니다.")
     public RunListResponse list(@AuthenticationPrincipal Jwt jwt,
-                              @org.springdoc.core.annotations.ParameterObject @ModelAttribute RunListQuery query) {
+                              @ParameterObject @ModelAttribute RunListQuery query) {
         return service.list(jwt.getSubject(), query.cursor(), query.limit());
     }
 
     @GetMapping("/{runId}")
     @Operation(summary = "러닝 상세", description = "route는 simplified(기본), full, none 중 선택합니다. 좌표는 [위도, 경도] 순서입니다.")
     public RunDetailResponse detail(@AuthenticationPrincipal Jwt jwt, @PathVariable String runId,
-                         @org.springdoc.core.annotations.ParameterObject @ModelAttribute RunDetailQuery query) {
+                         @ParameterObject @ModelAttribute RunDetailQuery query) {
         return service.detail(jwt.getSubject(), runId, query.route());
     }
 

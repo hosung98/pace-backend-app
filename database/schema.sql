@@ -20,7 +20,7 @@ CREATE TABLE users (
 CREATE TABLE user_auth_providers (
     id BIGSERIAL PRIMARY KEY,
     user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    provider VARCHAR(16) NOT NULL CHECK (provider = 'google'),
+    provider VARCHAR(16) NOT NULL CHECK (provider IN ('google', 'apple')),
     provider_user_id VARCHAR(255) NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     last_login_at TIMESTAMPTZ NOT NULL DEFAULT now(),

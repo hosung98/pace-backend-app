@@ -4,6 +4,7 @@ import com.pace.race.dto.*;
 import com.pace.race.service.RaceService;
 import jakarta.validation.Valid;
 import java.util.List;
+import org.springdoc.core.annotations.ParameterObject;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -21,7 +22,7 @@ public class RaceController {
     /** 목록 필터를 묶어 받고 대결 조회는 서비스에 위임합니다. */
     @GetMapping
     public List<RaceSummaryResponse> list(@AuthenticationPrincipal Jwt jwt,
-                                          @org.springdoc.core.annotations.ParameterObject @ModelAttribute RaceListQuery query) {
+                                          @ParameterObject @ModelAttribute RaceListQuery query) {
         return service.list(jwt.getSubject(), query.scope(), query.distanceMeters(),
                 query.from(), query.to(), query.hideFull());
     }

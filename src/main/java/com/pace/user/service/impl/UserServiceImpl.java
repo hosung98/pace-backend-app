@@ -2,6 +2,8 @@ package com.pace.user.service.impl;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.pace.auth.repository.TokenRepository;
+import com.pace.auth.repository.ProviderRepository;
+import com.pace.auth.provider.AppleGrantRevoker;
 import com.pace.common.exception.BusinessException;
 import com.pace.run.repository.RunRepository;
 import com.pace.user.dto.*;
@@ -21,14 +23,19 @@ public class UserServiceImpl implements UserService {
     private final SettingsRepository settings;
     private final TokenRepository tokens;
     private final RunRepository runs;
+    private final ProviderRepository providers;
+    private final AppleGrantRevoker appleRevoker;
 
     public UserServiceImpl(UserAccess access, UserRepository users, SettingsRepository settings,
-                           TokenRepository tokens, RunRepository runs) {
+                           TokenRepository tokens, RunRepository runs, ProviderRepository providers,
+                           AppleGrantRevoker appleRevoker) {
         this.access = access;
         this.users = users;
         this.settings = settings;
         this.tokens = tokens;
         this.runs = runs;
+        this.providers = providers;
+        this.appleRevoker = appleRevoker;
     }
 
     @Transactional(readOnly = true)
@@ -92,15 +99,25 @@ public class UserServiceImpl implements UserService {
     }
 
     @Transactional
-    public void delete(String subject) {
+    public void delete(String subject, DeleteAccountRequest request) {
         User user = access.user(subject, true);
+        providers.findAllByUserId(user.getId()).stream().filter(provider -> provider.getProvider().equals("apple"))
+                .forEach(provider -> {
+                    if (request == null) {
+                        throw new BusinessException(org.springframework.http.HttpStatus.CONFLICT,
+                                "APPLE_REAUTH_REQUIRED", "Apple 재인증 코드와 nonce가 있어야 탈퇴할 수 있습니다.");
+                    }
+                    appleRevoker.revoke(request.appleAuthorizationCode(), request.appleNonce(), provider.getProviderUserId());
+                });
         user.markDeleting();
         tokens.revokeUser(user.getId());
     }
 
     private MeResponse response(User user) {
         return new MeResponse(user.getPublicId(), user.getNickname(), user.getHandle(), user.getProfileImageUrl(),
-                user.getBio(), user.getProfileVisibility(), List.of("google"), user.getCreatedAt(),
+                user.getBio(), user.getProfileVisibility(),
+                providers.findAllByUserId(user.getId()).stream().map(provider -> provider.getProvider()).sorted().toList(),
+                user.getCreatedAt(),
                 new UserCountsResponse(runs.countByUserIdAndDeletedAtIsNull(user.getId())), null);
     }
 

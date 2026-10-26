@@ -4,7 +4,7 @@ Java 21 · Spring Boot 3.5 · Gradle · PostgreSQL · JPA · MyBatis 기반 API�
 
 ## 구현 범위
 
-- Google ID 토큰 검증 후 가입·로그인
+- Google·Apple ID 토큰 검증 후 가입·로그인
 - JWT 접근 토큰(30분), 갱신 토큰(30일) 회전과 재사용 감지
 - 내 정보·사용자 설정 부분 수정 및 회원 탈퇴
 - 러닝 저장·목록·상세·제목 수정·소프트 삭제·24시간 이내 복구
@@ -13,7 +13,7 @@ Java 21 · Spring Boot 3.5 · Gradle · PostgreSQL · JPA · MyBatis 기반 API�
 - 공개·초대 전용 대결 생성·검색·참가·취소와 모집 마감 시점의 인원 확정
 - Swagger, 상태 확인, 비루트 사용자 Docker 이미지
 
-Apple·Kakao 인증, 이미지 업로드와 실제 알림 발송은 후속 범위입니다.
+Kakao 인증, 이미지 업로드와 실제 알림 발송은 후속 범위입니다.
 대결 참가 결과는 GPS 기록 검증과 연동하지 않으며, 참가자 결과는 `null`입니다.
 
 ## 구조
@@ -28,7 +28,7 @@ src/main/java/com/pace/
     util/                   JSON·해시·시간대 처리
   auth/                     인증 도메인
     filter/                 JWT 인증·보안 예외 필터 (보안 체인에서만 등록)
-    provider/               Google 검증·JWT 인증 Provider
+    provider/               Google·Apple 검증·Apple 연결 해제·JWT 인증 Provider
     security/               인증 실패·권한 거부 공통 응답
   user/                     사용자·설정 도메인
   run/                      러닝 도메인
@@ -124,6 +124,15 @@ Gradle Wrapper와 `database/` SQL, 비밀 값 없는 공용 프로필 YAML은 �
    기존 DB도 비우거나 `schema.sql`을 다시 실행하지 말고 커뮤니티 스키마만 추가합니다.
 4. 애플리케이션 계정에 테이블·시퀀스 사용 권한을 부여합니다.
 
+기존 Google 전용 DB는 **새 서버 배포 전에**
+[database/apple-auth-schema.sql](database/apple-auth-schema.sql)을 DBeaver에서 실행합니다.
+`user_auth_providers.provider`의 CHECK만 `google`, `apple` 허용으로 확장하며
+사용자·러닝·토큰 행을 삭제하거나 테이블을 재생성하지 않습니다. 신규 DB는 수정된
+`schema.sql`에 이미 반영되어 별도 실행이 필요 없습니다.
+기존 제약 이름은 `user_auth_providers_provider_check`를 전제로 합니다. 실행 전
+`SELECT conname, pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'user_auth_providers'::regclass;`
+로 확인하고, 다르면 실제 CHECK 이름에 맞춰 SQL을 수정하세요.
+
 `community-schema.sql`은 크루·신청·대결용 테이블과 FK/인덱스, 마감 인원 스냅샷 트리거를
 추가합니다. `users`, `runs` 및 기존 행은 변경·삭제하지 않습니다. 커뮤니티 데이터가 아직
 없으므로 새 테이블은 비어 있는 상태로 시작합니다. 이 파일은 대상 DB마다 한 번만 실행합니다.
@@ -154,9 +163,83 @@ JDBC에는 `http://`를 사용하지 않습니다. 원격 DB를 쓰면 `DB_URL`�
 | `DB_HOST`, `DB_PORT` | 운영 기본 URL의 호스트·포트 (포트 기본 5432) |
 | `JWT_SECRET` | Base64로 인코딩한 최소 32바이트 난수. dev·prod 필수 |
 | `GOOGLE_CLIENT_IDS` | 허용할 OAuth Client ID 목록, 쉼표로 구분. dev·prod 필수 |
+| `APPLE_CLIENT_IDS` | 검증할 Apple audience 목록, 쉼표로 구분. 기본 `com.hocompany.pace` |
+| `APPLE_CLIENT_ID` | 탈퇴 코드 교환·폐기의 client_id. 기본 `com.hocompany.pace`, `APPLE_CLIENT_IDS`에도 포함해야 함 |
+| `APPLE_CLIENT_SECRET` | Apple ES256 client secret JWT. Apple 탈퇴 기능에 필수, 기본 빈 값(탈퇴 시 503, 성공 처리하지 않음) |
 | `SWAGGER_ENABLED` | 문서 공개 여부 |
 | `CORS_ORIGINS` | 허용할 웹 출처 목록, 쉼표로 구분 |
 | `PORT` | 서버 포트, 기본 8080 |
+
+### Apple 로그인·탈퇴 계약 및 배포 순서
+
+`POST /api/v1/auth/apple`은 인증 헤더 없이 다음 JSON을 받으며 Google과 동일한
+`AuthTokenResponse`를 반환합니다.
+
+```json
+{"idToken":"Apple identityToken","nonce":"새로 생성한 raw UUID nonce","nickname":"애플 러너"}
+```
+
+- `idToken`은 필수, 최대 16,000자, `nonce`는 필수 원문 16~256자입니다.
+  매 인증마다 암호학적으로 안전한 새 nonce를 생성하세요.
+- Expo `signInAsync({nonce: SHA256(rawNonce)})`에는 **소문자 16진수 SHA-256**을,
+  서버에는 `rawNonce`를 보냅니다. Expo 네이티브는 `request.nonce = options.nonce`로
+  그대로 전달하므로 추가 자동 해싱을 가정하지 않습니다.
+  [Expo 공식 문서](https://docs.expo.dev/versions/latest/sdk/apple-authentication/)
+  및 [공식 네이티브 구현](https://github.com/expo/expo/blob/sdk-58/packages/expo-apple-authentication/ios/AppleAuthenticationRequest.swift)을 확인했습니다.
+- Apple JWKS의 RS256 서명, 발급자 `https://appleid.apple.com`, 허용 audience,
+  만료·필수 subject 및 nonce 해시를 검증합니다. 시각 검증은 Spring 기본 60초 오차를 허용합니다.
+  서명 키는 원격 JWKS 캐시를 사용하며 연결 3초·응답 5초 제한을 둡니다.
+- nickname은 선택, 원문 2~30자이며 strip 후 2자 이상이어야 합니다. 최초 가입에만
+  저장하고 이후 로그인에서 덮어쓰지 않습니다. Apple 이름이 없는 최초 가입은 `러너`를 사용합니다.
+- 이메일은 계정 연결 키로 사용하지 않습니다. 제공자와 subject가 같은 계정만 재사용합니다.
+  Google과 Apple의 subject 또는 이메일이 같더라도 자동 병합하지 않습니다.
+- nonce는 서버 발급 챌린지나 일회용 저장소가 아닙니다. 로그인 토큰·원문 nonce 쌍을
+  탈취한 경우 만료 전 재전송을 막는 전역 replay 저장소는 제공하지 않으므로 HTTPS,
+  인증 요청/응답 본문 비로깅, 클라이언트의 nonce 비재사용이 필수입니다.
+
+**Apple 탈퇴는 프런트엔드 재인증 연동이 필수입니다.** 로그인 요청에 authorizationCode를
+추가하거나 Apple refresh token을 DB에 저장하지 않습니다. 탈퇴 직전 Apple에 다시 로그인하고
+새 `rawNonce`의 해시를 Apple 요청에 전달한 뒤 아래 요청을 보냅니다.
+
+```http
+DELETE /api/v1/users/me
+Authorization: Bearer <PACE accessToken>
+Content-Type: application/json
+
+{"appleAuthorizationCode":"새 Apple authorizationCode","appleNonce":"이번 Apple 재인증의 rawNonce"}
+```
+
+서버는 일회용 코드(Apple 유효기간 5분)를 `/auth/token`에서 교환하고, 반환된 ID 토큰의
+서명·nonce와 저장된 Apple subject를 대조한 뒤 `/auth/revoke`에 refresh token을 보냅니다.
+Apple의 HTTP 200 폐기 응답을 확인한 후에만 PACE 계정을 `deleting`으로 변경하고
+PACE 갱신 토큰을 폐기하여 202를 반환합니다. 그 뒤 기존 배치가 DB 데이터를 삭제합니다.
+Google 등 Apple 연결이 없는 계정은 기존처럼 DELETE 본문 없이 탈퇴할 수 있습니다.
+
+- Apple 계정에서 본문 없음: 409 `APPLE_REAUTH_REQUIRED`.
+- 잘못된 본문: 400, 재인증 계정 불일치·ID 토큰/nonce 오류: 401.
+- client secret 미설정: 503 `APPLE_REVOCATION_NOT_CONFIGURED`.
+- 코드 교환·폐기 HTTP 오류/타임아웃/필수 토큰 누락: 502 `APPLE_REVOCATION_FAILED`.
+  위 실패는 로컬 탈퇴를 진행하지 않습니다. 클라이언트는 성공 화면으로 처리하지 말고
+  원인을 해결한 후 **새 Apple 코드·nonce**로 다시 시도해야 합니다.
+- Apple 원격 폐기와 DB 커밋은 분산 트랜잭션이 아닙니다. 원격 폐기 후 로컬 커밋 실패나
+  응답 유실 가능성까지 원자적 완료를 보장하지 않습니다. 202도 Apple 사용자의 전체 Apple ID
+  삭제나 모든 기기의 즉시 반영, DB 배치 삭제 완료를 뜻하지 않습니다.
+
+`APPLE_CLIENT_SECRET`은 배포 비밀 관리 시스템에서 생성·주기적으로 교체하는 Apple client
+secret JWT입니다. 헤더 `alg=ES256`, `kid=<Apple Key ID>`, 클레임 `iss=<Team ID>`,
+`sub=<APPLE_CLIENT_ID>`, `aud=https://appleid.apple.com`, 현재 `iat`, 최대 6개월 이내
+`exp`로 Apple Sign in with Apple `.p8` 키를 사용해 서명합니다. 이 서버는 키 파일을
+읽거나 client secret을 자동 갱신하지 않습니다. 만료 전 교체가 운영 필수 조건입니다.
+코드·ID/refresh 토큰·client secret은 저장하거나 로그에 출력하지 않습니다.
+인증·탈퇴 본문을 캡처하는 프록시/APM 및 JDK HTTP wire 로그도 사용하지 마세요.
+
+배포 순서: DB CHECK 수동 확장 → Apple Developer의 앱 ID `com.hocompany.pace`에
+Sign in with Apple 설정 및 client secret 준비 → 환경 변수 주입 → 백엔드 배포 →
+실제 기기 로그인·재인증 탈퇴 확인입니다. 코드만 배포하고 secret 또는 프런트엔드 탈퇴
+재인증을 생략하면 Apple 탈퇴가 **차단**됩니다. App Store 제출 전에 이를 완료해야 합니다.
+서버에서 `appleid.apple.com` JWKS·token·revoke HTTPS 통신이 가능해야 합니다.
+[Apple 코드 교환](https://developer.apple.com/documentation/signinwithapplerestapi/generate_and_validate_tokens),
+[Apple 토큰 폐기](https://developer.apple.com/documentation/signinwithapplerestapi/revoke_tokens).
 
 `local`에서 JWT 키를 생략하면 경고 후 임시 키를 생성합니다. 재시작하면 기존 토큰은
 무효가 됩니다. Google 설정을 생략한 local 환경에서는 실제 로그인을 할 수 없습니다.
@@ -236,7 +319,7 @@ Dockerfile은 Java 21 멀티스테이지 빌드 후 UID/GID `10001`로 실행합
 - Readiness: `/actuator/health/readiness` (DB 연결 포함)
 - 정상 종료: SIGTERM과 Spring의 graceful shutdown 사용
 - DB SQL은 배포 전 별도 수동 실행
-- DB/Tailscale·Google JWKS 서버로의 네트워크 접근 필요
+- DB/Tailscale·Google JWKS·Apple JWKS/token/revoke 서버로의 네트워크 접근 필요
 - Ingress에서 HTTPS, 요청 크기 제한, 인증 API 호출 제한을 적용하세요.
 
 ## API 운영 규칙

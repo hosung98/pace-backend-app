@@ -3,6 +3,8 @@ package com.pace;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.pace.auth.provider.GoogleVerifier;
+import com.pace.auth.provider.AppleVerifier;
+import com.pace.auth.provider.AppleGrantRevoker;
 import com.pace.user.scheduler.AccountCleanupScheduler;
 import io.zonky.test.db.postgres.embedded.EmbeddedPostgres;
 import java.io.IOException;
@@ -61,6 +63,8 @@ class ApiIntegrationTest {
     @Autowired AccountCleanupScheduler cleanup;
     @Autowired org.springframework.security.oauth2.jwt.JwtEncoder jwtEncoder;
     @MockitoBean GoogleVerifier google;
+    @MockitoBean AppleVerifier apple;
+    @MockitoBean AppleGrantRevoker appleRevoker;
 
     @BeforeEach
     void resetDatabase() {
@@ -68,6 +72,7 @@ class ApiIntegrationTest {
         when(google.verify("google-a")).thenReturn(new GoogleVerifier.Identity("subject-a", "테스트 러너"));
         when(google.verify("google-b")).thenReturn(new GoogleVerifier.Identity("subject-b", "다른 러너"));
         when(google.verify("google-c")).thenReturn(new GoogleVerifier.Identity("subject-c", "세 번째 러너"));
+        when(apple.verify("apple-a", "raw-nonce-1234567890")).thenReturn(new AppleVerifier.Identity("subject-a"));
     }
 
     @AfterAll
@@ -80,6 +85,114 @@ class ApiIntegrationTest {
     }
 
     String bearer(JsonNode login) { return "Bearer " + login.get("accessToken").asText(); }
+
+    JsonNode appleLogin(Map<String, String> body) throws Exception {
+        return json.readTree(mvc.perform(post("/api/v1/auth/apple").contentType("application/json")
+                        .content(json.writeValueAsString(body)))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString());
+    }
+
+    @Test
+    void Apple_가입은_제공자별로_분리하고_닉네임은_최초에만_저장한다() throws Exception {
+        JsonNode googleUser = login("google-a");
+        JsonNode first = appleLogin(Map.of("idToken", "apple-a", "nonce", "raw-nonce-1234567890", "nickname", "애플 러너"));
+        assertThat(first.get("isNewUser").asBoolean()).isTrue();
+        assertThat(first.at("/user/id")).isNotEqualTo(googleUser.at("/user/id"));
+        assertThat(first.get("accessTokenExpiresIn").asInt()).isEqualTo(1800);
+        JsonNode again = appleLogin(Map.of("idToken", "apple-a", "nonce", "raw-nonce-1234567890", "nickname", "바뀐 이름"));
+        assertThat(again.get("isNewUser").asBoolean()).isFalse();
+        assertThat(again.at("/user/id")).isEqualTo(first.at("/user/id"));
+        assertThat(again.at("/user/nickname").asText()).isEqualTo("애플 러너");
+        mvc.perform(get("/api/v1/users/me").header("Authorization", bearer(first)))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.linkedProviders[0]").value("apple"));
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM users", Integer.class)).isEqualTo(2);
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM user_settings", Integer.class)).isEqualTo(2);
+        when(apple.verify("apple-b", "raw-nonce-1234567890")).thenReturn(new AppleVerifier.Identity("other-apple"));
+        JsonNode fallback = appleLogin(Map.of("idToken", "apple-b", "nonce", "raw-nonce-1234567890"));
+        assertThat(fallback.at("/user/nickname").asText()).isEqualTo("러너");
+    }
+
+    @Test
+    void Apple도_회전_재사용탐지_로그아웃과_탈퇴_인증차단을_공유한다() throws Exception {
+        Map<String, String> body = Map.of("idToken", "apple-a", "nonce", "raw-nonce-1234567890");
+        JsonNode first = appleLogin(body);
+        JsonNode rotated = json.readTree(mvc.perform(post("/api/v1/auth/refresh").contentType("application/json")
+                        .content(json.writeValueAsString(Map.of("refreshToken", first.get("refreshToken").asText()))))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString());
+        for (JsonNode token : List.of(first, rotated)) {
+            mvc.perform(post("/api/v1/auth/refresh").contentType("application/json")
+                    .content(json.writeValueAsString(Map.of("refreshToken", token.get("refreshToken").asText()))))
+                    .andExpect(status().isUnauthorized());
+        }
+        JsonNode separate = appleLogin(body);
+        mvc.perform(post("/api/v1/auth/logout").header("Authorization", bearer(separate)).contentType("application/json")
+                .content(json.writeValueAsString(Map.of("refreshToken", separate.get("refreshToken").asText()))))
+                .andExpect(status().isNoContent());
+        mvc.perform(post("/api/v1/auth/refresh").contentType("application/json")
+                .content(json.writeValueAsString(Map.of("refreshToken", separate.get("refreshToken").asText()))))
+                .andExpect(status().isUnauthorized());
+        JsonNode deleting = appleLogin(body);
+        mvc.perform(delete("/api/v1/users/me").header("Authorization", bearer(deleting)))
+                .andExpect(status().isConflict()).andExpect(jsonPath("$.code").value("APPLE_REAUTH_REQUIRED"));
+        mvc.perform(get("/api/v1/users/me").header("Authorization", bearer(deleting))).andExpect(status().isOk());
+        String deletionBody = "{\"appleAuthorizationCode\":\"fresh-code\",\"appleNonce\":\"raw-nonce-1234567890\"}";
+        doThrow(new com.pace.common.exception.BusinessException(org.springframework.http.HttpStatus.BAD_GATEWAY,
+                "APPLE_REVOCATION_FAILED", "연결 해제 실패"))
+                .when(appleRevoker).revoke("fresh-code", "raw-nonce-1234567890", "subject-a");
+        mvc.perform(delete("/api/v1/users/me").header("Authorization", bearer(deleting))
+                        .contentType("application/json").content(deletionBody))
+                .andExpect(status().isBadGateway());
+        mvc.perform(get("/api/v1/users/me").header("Authorization", bearer(deleting))).andExpect(status().isOk());
+        assertThat(jdbc.queryForObject("SELECT status FROM users", String.class)).isEqualTo("active");
+        doNothing().when(appleRevoker).revoke("fresh-code", "raw-nonce-1234567890", "subject-a");
+        mvc.perform(delete("/api/v1/users/me").header("Authorization", bearer(deleting))
+                        .contentType("application/json").content(deletionBody))
+                .andExpect(status().isAccepted());
+        mvc.perform(get("/api/v1/users/me").header("Authorization", bearer(deleting))).andExpect(status().isUnauthorized());
+        mvc.perform(post("/api/v1/auth/refresh").contentType("application/json")
+                .content(json.writeValueAsString(Map.of("refreshToken", deleting.get("refreshToken").asText()))))
+                .andExpect(status().isUnauthorized());
+        mvc.perform(post("/api/v1/auth/apple").contentType("application/json").content(json.writeValueAsString(body)))
+                .andExpect(status().isUnauthorized());
+        cleanup.purgeDeletedAccounts();
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM users", Integer.class)).isZero();
+    }
+
+    @Test
+    void Apple_잘못된_입력과_검증실패는_사용자를_생성하지_않는다() throws Exception {
+        for (var body : List.of(
+                Map.of("idToken", "apple-a"),
+                Map.of("idToken", "", "nonce", "raw-nonce-1234567890"),
+                Map.of("idToken", "x".repeat(16001), "nonce", "raw-nonce-1234567890"),
+                Map.of("idToken", "apple-a", "nonce", "short"),
+                Map.of("idToken", "apple-a", "nonce", "n".repeat(257)),
+                Map.of("idToken", "apple-a", "nonce", "raw-nonce-1234567890", "nickname", " "),
+                Map.of("idToken", "apple-a", "nonce", "raw-nonce-1234567890", "nickname", "a".repeat(31)),
+                Map.of("idToken", "apple-a", "nonce", "raw-nonce-1234567890", "nickname", "  "))) {
+            mvc.perform(post("/api/v1/auth/apple").contentType("application/json").content(json.writeValueAsString(body)))
+                    .andExpect(status().isBadRequest());
+        }
+        when(apple.verify("invalid", "raw-nonce-1234567890"))
+                .thenThrow(com.pace.common.exception.BusinessException.unauthorized());
+        mvc.perform(post("/api/v1/auth/apple").contentType("application/json")
+                .content("{\"idToken\":\"invalid\",\"nonce\":\"raw-nonce-1234567890\"}"))
+                .andExpect(status().isUnauthorized()).andExpect(jsonPath("$.code").value("UNAUTHORIZED"));
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM users", Integer.class)).isZero();
+    }
+
+    @Test
+    void Apple_수동_스키마_확장은_기존_사용자와_러닝을_보존한다() throws Exception {
+        JsonNode existing = login("google-a");
+        save(bearer(existing), run("before-apple", "2026-01-01T01:00:00Z", 1000, 300), 201);
+        jdbc.execute("ALTER TABLE user_auth_providers DROP CONSTRAINT user_auth_providers_provider_check");
+        jdbc.execute("ALTER TABLE user_auth_providers ADD CONSTRAINT user_auth_providers_provider_check CHECK (provider = 'google')");
+        new ResourceDatabasePopulator(new FileSystemResource("database/apple-auth-schema.sql"))
+                .execute(jdbc.getDataSource());
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM runs", Integer.class)).isEqualTo(1);
+        assertThat(login("google-a").at("/user/id")).isEqualTo(existing.at("/user/id"));
+        appleLogin(Map.of("idToken", "apple-a", "nonce", "raw-nonce-1234567890"));
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM users", Integer.class)).isEqualTo(2);
+    }
 
     Map<String, Object> run(String id, String start, int distance, int duration) {
         Instant instant = Instant.parse(start);

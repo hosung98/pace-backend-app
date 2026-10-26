@@ -14,7 +14,7 @@ import org.springframework.web.bind.annotation.*;
 
 @RestController
 @RequestMapping("/api/v1/auth")
-@Tag(name = "인증", description = "Google 로그인과 토큰 갱신·로그아웃")
+@Tag(name = "인증", description = "Google·Apple 로그인과 토큰 갱신·로그아웃")
 public class AuthController {
     private final AuthService service;
 
@@ -27,6 +27,14 @@ public class AuthController {
     @Operation(summary = "Google ID 토큰 검증 후 로그인 또는 가입")
     public AuthTokenResponse google(@Valid @RequestBody GoogleLoginRequest request) {
         return service.login(request.idToken());
+    }
+
+    @PostMapping("/apple")
+    @SecurityRequirements
+    @Operation(summary = "Apple ID 토큰과 nonce 검증 후 로그인 또는 가입",
+            description = "nonce는 원문(16~256자)입니다. Apple 요청에는 SHA-256 소문자 16진수 해시를 전달합니다. nickname은 최초 가입에만 사용합니다.")
+    public AuthTokenResponse apple(@Valid @RequestBody AppleLoginRequest request) {
+        return service.loginApple(request.idToken(), request.nonce(), request.nickname());
     }
 
     @PostMapping("/refresh")

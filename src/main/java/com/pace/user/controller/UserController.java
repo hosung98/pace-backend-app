@@ -40,9 +40,11 @@ public class UserController {
     }
 
     @DeleteMapping
-    @Operation(summary = "회원 탈퇴", description = "즉시 인증을 차단하고 배치로 계정과 기록을 영구 삭제합니다.")
-    public ResponseEntity<?> delete(@AuthenticationPrincipal Jwt jwt, HttpServletRequest request) {
-        service.delete(jwt.getSubject());
+    @Operation(summary = "회원 탈퇴", description = "Apple 계정은 새 인증 코드·원문 nonce로 Apple 연결 해제 성공을 확인한 후에만 탈퇴합니다. 이후 PACE 인증 차단 및 배치 삭제가 진행됩니다. 다른 계정은 본문이 필요 없습니다.")
+    public ResponseEntity<?> delete(@AuthenticationPrincipal Jwt jwt,
+                                    @Valid @RequestBody(required = false) DeleteAccountRequest body,
+                                    HttpServletRequest request) {
+        service.delete(jwt.getSubject(), body);
         return ResponseEntity.accepted().body(Map.of("requestId", request.getAttribute("requestId")));
     }
 

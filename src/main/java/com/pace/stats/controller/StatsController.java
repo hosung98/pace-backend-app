@@ -5,6 +5,7 @@ import com.pace.stats.service.StatsService;
 
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import org.springdoc.core.annotations.ParameterObject;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.*;
@@ -20,7 +21,7 @@ public class StatsController {
     @GetMapping("/dashboard")
     @Operation(summary = "오늘 거리·이번 주 목표와 기록·최근 러닝 조회")
     public DashboardResponse dashboard(@AuthenticationPrincipal Jwt jwt,
-                                          @org.springdoc.core.annotations.ParameterObject @ModelAttribute DashboardQuery query) {
+                                          @ParameterObject @ModelAttribute DashboardQuery query) {
         return service.dashboard(jwt.getSubject(), query.timeZone());
     }
 
@@ -28,7 +29,7 @@ public class StatsController {
     @GetMapping("/stats/running")
     @Operation(summary = "주간·월간 러닝 통계", description = "주간은 월요일 시작 7칸, 월간은 1~7일 단위 버킷입니다. 페이스는 거리 가중 평균입니다.")
     public RunningStatsResponse running(@AuthenticationPrincipal Jwt jwt,
-                                       @org.springdoc.core.annotations.ParameterObject @ModelAttribute RunningStatsQuery query) {
+                                       @ParameterObject @ModelAttribute RunningStatsQuery query) {
         return service.running(jwt.getSubject(), query.period(), query.date(), query.timeZone());
     }
 }
