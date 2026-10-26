@@ -49,6 +49,13 @@ public class CrewController {
         return ResponseEntity.status(HttpStatus.CREATED).body(service.create(jwt.getSubject(), request));
     }
 
+    @PatchMapping("/crews/{crewId}")
+    public ResponseEntity<Void> update(@AuthenticationPrincipal Jwt jwt, @PathVariable String crewId,
+                                       @Valid @RequestBody CreateCrewRequest request) {
+        service.update(jwt.getSubject(), crewId, request);
+        return ResponseEntity.noContent().build();
+    }
+
     @PostMapping("/crews/join-by-code")
     public CrewIdResponse joinByCode(@AuthenticationPrincipal Jwt jwt, @Valid @RequestBody JoinByCodeRequest request) {
         return service.joinByCode(jwt.getSubject(), request.code());

@@ -115,7 +115,7 @@ public class CrewServiceImpl implements CrewService {
         ensureNoMembershipOrRequest(user.getId());
         String name = request.name().trim();
         String intro = request.intro().trim();
-        if (name.isEmpty()) throw BusinessException.invalid("크루 이름을 입력해 주세요.");
+        if (name.length() < 2) throw BusinessException.invalid("크루 이름은 2자 이상 입력해 주세요.");
         CrewRegion region = request.region();
         if (region != null) validateRegion(region.sido(), region.sigungu());
         Crew crew = crews.saveAndFlush(new Crew(name, intro,
@@ -123,6 +123,20 @@ public class CrewServiceImpl implements CrewService {
                 user.getId(), newInviteCode()));
         members.save(new CrewMember(crew.getId(), user.getId(), "leader"));
         return new CrewIdResponse(crew.getPublicId());
+    }
+
+    @Override
+    @Transactional
+    public void update(String subject, String crewId, CreateCrewRequest request) {
+        User leader = access.user(subject, true);
+        Crew crew = crews.lockByPublicId(crewId).orElseThrow(BusinessException::missing);
+        requireLeader(crew, leader.getId());
+        String name = request.name().trim();
+        if (name.length() < 2) throw BusinessException.invalid("크루 이름은 2자 이상 입력해 주세요.");
+        CrewRegion region = request.region();
+        if (region != null) validateRegion(region.sido(), region.sigungu());
+        crew.updateInfo(name, request.intro().trim(),
+                region == null ? null : clean(region.sido()), region == null ? null : clean(region.sigungu()));
     }
 
     @Override
@@ -307,16 +321,17 @@ public class CrewServiceImpl implements CrewService {
     }
 
     private void validateRegion(String sido, String sigungu) {
-        if ((sido == null) != (sigungu == null)) {
-            throw BusinessException.invalid("시·도와 시·군·구를 함께 입력하거나 모두 생략해 주세요.");
+        if (sido == null && sigungu != null) {
+            throw BusinessException.invalid("시·군·구를 선택하려면 시·도를 먼저 입력해 주세요.");
         }
-        if (sido != null && (sido.isBlank() || sigungu.isBlank() || sido.length() > 30 || sigungu.length() > 40)) {
+        if ((sido != null && (sido.isBlank() || sido.length() > 30))
+                || (sigungu != null && (sigungu.isBlank() || sigungu.length() > 40))) {
             throw BusinessException.invalid("지역 값이 올바르지 않습니다.");
         }
     }
 
     private CrewRegion region(String sido, String sigungu) {
-        return sido == null || sigungu == null ? null : new CrewRegion(sido, sigungu);
+        return sido == null ? null : new CrewRegion(sido, sigungu);
     }
 
     private String clean(String value) {

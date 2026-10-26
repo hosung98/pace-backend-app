@@ -67,6 +67,17 @@ public class Race {
     public Integer getDeadlineParticipantCount() { return deadlineParticipantCount; }
     public String getInviteCode() { return inviteCode; }
     public void cancel() { cancelled = true; }
+    public void updateInfo(String title, int distanceMeters, Instant startsAt, int joinDeadlineMinutes,
+                           int minParticipants, int maxParticipants, String visibility, String inviteCode) {
+        this.title = title;
+        this.distanceMeters = distanceMeters;
+        this.startsAt = startsAt;
+        this.joinDeadlineMinutes = joinDeadlineMinutes;
+        this.minParticipants = minParticipants;
+        this.maxParticipants = maxParticipants;
+        this.visibility = visibility;
+        this.inviteCode = inviteCode;
+    }
     public void processDeadline(Instant at, int count) {
         if (deadlineProcessedAt != null) return;
         deadlineProcessedAt = at;

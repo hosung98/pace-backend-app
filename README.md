@@ -9,12 +9,24 @@ Java 21 · Spring Boot 3.5 · Gradle · PostgreSQL · JPA · MyBatis 기반 API�
 - 내 정보·사용자 설정 부분 수정 및 회원 탈퇴
 - 러닝 저장·목록·상세·제목 수정·소프트 삭제·24시간 이내 복구
 - 시간대 기준 대시보드·주간·월간 통계
-- 크루 생성·검색·주간/월간 순위·실제 러닝 통계·초대 코드·가입 승인과 크루장 권한 양도
-- 공개·초대 전용 대결 생성·검색·참가·취소와 모집 마감 시점의 인원 확정
+- 크루 생성·정보 수정·검색·주간/월간 순위·실제 러닝 통계·초대 코드·가입 승인과 크루장 권한 양도
+- 공개·초대 전용 대결 생성·정보 수정·검색·참가·취소와 모집 마감 시점의 인원 확정
 - Swagger, 상태 확인, 비루트 사용자 Docker 이미지
 
 Kakao 인증, 이미지 업로드와 실제 알림 발송은 후속 범위입니다.
 대결 참가 결과는 GPS 기록 검증과 연동하지 않으며, 참가자 결과는 `null`입니다.
+
+### 크루·대결 수정
+
+- `PATCH /api/v1/crews/{crewId}`: 생성 DTO와 같은 전체 편집 필드(이름·소개·지역), 성공 `204`.
+  크루장만 수정하며, 시/도만 지정한 지역(`sigungu: null`)도 생성·수정·검색할 수 있습니다.
+- `PATCH /api/v1/races/{raceId}`: 생성 DTO와 같은 전체 편집 필드, 성공 `204`.
+  방장만 모집 마감 전 수정할 수 있으며 취소·마감 처리된 방은 수정할 수 없습니다.
+  다른 참가자가 있으면 이름·최대 인원만 변경할 수 있습니다. 최대 인원은 현재 참가 인원 이상이어야 합니다.
+  방장 혼자일 때 공개→비공개로 바꾸면 초대 코드를 생성하고, 비공개→공개는 코드를 제거합니다.
+- 행 잠금 아래 권한·상태·참가 인원을 재검사합니다. 수정 API 자체에 새 컬럼은 필요하지 않지만,
+  기존 DB는 시/도 전체 선택을 위해 `database/crew-region-schema.sql`의 CHECK 변경이 필요합니다.
+  이 작업은 DB에 자동 실행하지 않습니다. DB 변경과 백엔드 배포가 앱 업데이트보다 먼저 필요합니다.
 
 ## 구조
 
@@ -123,6 +135,12 @@ Gradle Wrapper와 `database/` SQL, 비밀 값 없는 공용 프로필 YAML은 �
 3. 이어서 [database/community-schema.sql](database/community-schema.sql)을 한 번 실행합니다.
    기존 DB도 비우거나 `schema.sql`을 다시 실행하지 말고 커뮤니티 스키마만 추가합니다.
 4. 애플리케이션 계정에 테이블·시퀀스 사용 권한을 부여합니다.
+
+기존 커뮤니티 DB는 [database/crew-region-schema.sql](database/crew-region-schema.sql)을 서버 배포 전에 실행합니다.
+시/도 전체(`sigungu: null`)를 허용하도록 CHECK만 완화하며 기존 행은 유지합니다.
+기존 이름은 `crews_check`를 전제로 하므로
+`SELECT conname, pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'crews'::regclass;`
+로 확인하고 이름이 다르면 SQL을 맞춰 주세요. 신규 DB는 수정된 `community-schema.sql`에 반영되어 있습니다.
 
 기존 Google 전용 DB는 **새 서버 배포 전에**
 [database/apple-auth-schema.sql](database/apple-auth-schema.sql)을 DBeaver에서 실행합니다.

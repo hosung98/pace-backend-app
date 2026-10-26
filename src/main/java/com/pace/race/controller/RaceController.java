@@ -38,6 +38,13 @@ public class RaceController {
         return ResponseEntity.status(HttpStatus.CREATED).body(service.create(jwt.getSubject(), request));
     }
 
+    @PatchMapping("/{raceId}")
+    public ResponseEntity<Void> update(@AuthenticationPrincipal Jwt jwt, @PathVariable String raceId,
+                                       @Valid @RequestBody CreateRaceRequest request) {
+        service.update(jwt.getSubject(), raceId, request);
+        return ResponseEntity.noContent().build();
+    }
+
     @PostMapping("/{raceId}/participants")
     public ResponseEntity<Void> join(@AuthenticationPrincipal Jwt jwt, @PathVariable String raceId) {
         service.join(jwt.getSubject(), raceId);

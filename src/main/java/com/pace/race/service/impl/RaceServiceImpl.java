@@ -115,6 +115,39 @@ public class RaceServiceImpl implements RaceService {
 
     @Override
     @Transactional
+    public void update(String subject, String raceId, CreateRaceRequest request) {
+        User host = access.user(subject, true);
+        Race race = races.lockByPublicId(raceId).orElseThrow(BusinessException::missing);
+        if (!race.getHostUserId().equals(host.getId())) {
+            throw new BusinessException(HttpStatus.FORBIDDEN, "FORBIDDEN", "대결 방장만 수정할 수 있습니다.");
+        }
+        if (race.isCancelled() || race.getDeadlineProcessedAt() != null) {
+            throw BusinessException.conflict("모집 중인 대결만 수정할 수 있습니다.");
+        }
+        ensureBeforeDeadline(race);
+        validateCreate(request);
+        long count = participants.countForRace(race.getId());
+        if (request.maxParticipants() < count) {
+            throw BusinessException.conflict("최대 인원은 현재 참가 인원보다 작을 수 없습니다.");
+        }
+        String visibility = request.visibility().trim().toLowerCase(Locale.ROOT);
+        boolean termsChanged = !race.getDistanceMeters().equals(request.distanceMeters())
+                || !race.getStartsAt().equals(request.startsAt())
+                || !race.getJoinDeadlineMinutes().equals(request.joinDeadlineMinutes())
+                || !race.getMinParticipants().equals(request.minParticipants())
+                || !race.getVisibility().equals(visibility);
+        if (count > 1 && termsChanged) {
+            throw BusinessException.conflict("다른 참가자가 있으면 이름과 최대 인원만 수정할 수 있습니다.");
+        }
+        String inviteCode = visibility.equals("private")
+                ? (race.getInviteCode() == null ? newInviteCode() : race.getInviteCode()) : null;
+        race.updateInfo(request.title().trim(), request.distanceMeters(), request.startsAt(),
+                request.joinDeadlineMinutes(), request.minParticipants(), request.maxParticipants(),
+                visibility, inviteCode);
+    }
+
+    @Override
+    @Transactional
     public void join(String subject, String raceId) {
         User user = access.user(subject, true);
         Race race = races.lockByPublicId(raceId).orElseThrow(BusinessException::missing);

@@ -9,6 +9,7 @@ public interface CrewService {
     MyCrewResponse myCrew(String subject);
     CrewDetailResponse detail(String subject, String crewId, String period);
     CrewIdResponse create(String subject, CreateCrewRequest request);
+    void update(String subject, String crewId, CreateCrewRequest request);
     CrewIdResponse joinByCode(String subject, String code);
     void requestJoin(String subject, String crewId);
     void cancelMyRequest(String subject);

@@ -48,4 +48,10 @@ public class Crew {
     public String getInviteCode() { return inviteCode; }
     public void setInviteCode(String value) { inviteCode = value; }
     public void setLeaderUserId(long value) { leaderUserId = value; }
+    public void updateInfo(String name, String intro, String sido, String sigungu) {
+        this.name = name;
+        this.intro = intro;
+        this.sido = sido;
+        this.sigungu = sigungu;
+    }
 }

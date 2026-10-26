@@ -9,6 +9,7 @@ public interface RaceService {
                                    Instant from, Instant to, boolean hideFull);
     RaceDetailResponse detail(String subject, String raceId);
     RaceIdResponse create(String subject, CreateRaceRequest request);
+    void update(String subject, String raceId, CreateRaceRequest request);
     void join(String subject, String raceId);
     void leave(String subject, String raceId);
     RaceIdResponse joinByCode(String subject, String code);

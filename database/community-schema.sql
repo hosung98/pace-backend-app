@@ -17,7 +17,7 @@ CREATE TABLE crews (
     leader_user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     invite_code VARCHAR(8) NOT NULL UNIQUE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    CHECK ((sido IS NULL) = (sigungu IS NULL))
+    CONSTRAINT crews_region_check CHECK (sido IS NOT NULL OR sigungu IS NULL)
 );
 CREATE INDEX idx_crews_name ON crews (lower(name));
 

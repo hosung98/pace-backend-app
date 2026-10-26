@@ -424,6 +424,98 @@ class ApiIntegrationTest {
     }
 
     @Test
+    void crewEditingPersistsAndRequiresCurrentLeader() throws Exception {
+        jdbc.execute("ALTER TABLE crews DROP CONSTRAINT crews_region_check");
+        jdbc.execute("ALTER TABLE crews ADD CONSTRAINT crews_check CHECK ((sido IS NULL) = (sigungu IS NULL))");
+        new ResourceDatabasePopulator(new FileSystemResource("database/crew-region-schema.sql"))
+                .execute(POSTGRES.getPostgresDatabase());
+        new ResourceDatabasePopulator(new FileSystemResource("database/crew-region-schema.sql"))
+                .execute(POSTGRES.getPostgresDatabase());
+        String leader = bearer(login("google-a"));
+        String other = bearer(login("google-b"));
+        String id = json.readTree(mvc.perform(post("/api/v1/crews").header("Authorization", leader)
+                        .contentType("application/json")
+                        .content("{\"name\":\"지역 크루\",\"intro\":\"처음 소개\",\"region\":{\"sido\":\"서울\",\"sigungu\":null}}"))
+                .andExpect(status().isCreated()).andReturn().getResponse().getContentAsString()).get("id").asText();
+        String body = "{\"name\":\"  바뀐 크루  \",\"intro\":\"  새 소개  \",\"region\":{\"sido\":\"부산\",\"sigungu\":null}}";
+        mvc.perform(patch("/api/v1/crews/" + id).contentType("application/json").content(body))
+                .andExpect(status().isUnauthorized());
+        mvc.perform(patch("/api/v1/crews/" + id).header("Authorization", other)
+                        .contentType("application/json").content(body)).andExpect(status().isForbidden());
+        mvc.perform(patch("/api/v1/crews/" + id).header("Authorization", leader)
+                        .contentType("application/json").content(body)).andExpect(status().isNoContent());
+        mvc.perform(get("/api/v1/crews/" + id).header("Authorization", leader))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.name").value("바뀐 크루"))
+                .andExpect(jsonPath("$.intro").value("새 소개")).andExpect(jsonPath("$.region.sido").value("부산"))
+                .andExpect(jsonPath("$.region.sigungu").isEmpty()).andExpect(jsonPath("$.membership").value("leader"));
+        mvc.perform(get("/api/v1/crews").header("Authorization", other).param("sido", "부산"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$[0].id").value(id));
+        for (String invalid : List.of(
+                "{\"name\":\" a \",\"intro\":\"\",\"region\":null}",
+                "{\"name\":\"정상 이름\",\"intro\":\"\",\"region\":{\"sigungu\":\"강남구\"}}",
+                "{\"name\":\"\",\"intro\":\"\",\"region\":null}")) {
+            mvc.perform(patch("/api/v1/crews/" + id).header("Authorization", leader)
+                            .contentType("application/json").content(invalid)).andExpect(status().isBadRequest());
+        }
+        mvc.perform(get("/api/v1/crews/" + id).header("Authorization", leader))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.name").value("바뀐 크루"));
+    }
+
+    @Test
+    void raceEditingProtectsParticipantsAndClosesAtDeadline() throws Exception {
+        String host = bearer(login("google-a"));
+        String runner = bearer(login("google-b"));
+        String third = bearer(login("google-c"));
+        Map<String, Object> body = new java.util.HashMap<>(Map.of("title", "처음 대결", "distanceMeters", 5000,
+                "startsAt", Instant.now().plusSeconds(7200).toString(), "joinDeadlineMinutes", 30,
+                "minParticipants", 2, "maxParticipants", 10, "visibility", "public"));
+        String id = json.readTree(mvc.perform(post("/api/v1/races").header("Authorization", host)
+                        .contentType("application/json").content(json.writeValueAsString(body)))
+                .andExpect(status().isCreated()).andReturn().getResponse().getContentAsString()).get("id").asText();
+        String path = "/api/v1/races/" + id;
+        mvc.perform(patch(path).contentType("application/json").content(json.writeValueAsString(body)))
+                .andExpect(status().isUnauthorized());
+        mvc.perform(patch(path).header("Authorization", runner).contentType("application/json")
+                .content(json.writeValueAsString(body))).andExpect(status().isForbidden());
+        body.put("distanceMeters", 10000);
+        body.put("visibility", "private");
+        mvc.perform(patch(path).header("Authorization", host).contentType("application/json")
+                .content(json.writeValueAsString(body))).andExpect(status().isNoContent());
+        JsonNode detail = json.readTree(mvc.perform(get(path).header("Authorization", host))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.distanceMeters").value(10000))
+                .andReturn().getResponse().getContentAsString());
+        String code = detail.get("inviteCode").asText();
+        for (String token : List.of(runner, third)) {
+            mvc.perform(post("/api/v1/races/join-by-code").header("Authorization", token)
+                    .contentType("application/json").content(json.writeValueAsString(Map.of("code", code))))
+                    .andExpect(status().isOk());
+        }
+        for (Map.Entry<String, Object> change : Map.<String, Object>of(
+                "distanceMeters", 3000, "startsAt", Instant.now().plusSeconds(10800).toString(),
+                "joinDeadlineMinutes", 10, "minParticipants", 3, "visibility", "public", "maxParticipants", 2).entrySet()) {
+            Map<String, Object> changed = new java.util.HashMap<>(body);
+            changed.put(change.getKey(), change.getValue());
+            mvc.perform(patch(path).header("Authorization", host).contentType("application/json")
+                    .content(json.writeValueAsString(changed))).andExpect(status().isConflict());
+        }
+        body.put("title", "  바뀐 대결  ");
+        body.put("maxParticipants", 3);
+        mvc.perform(patch(path).header("Authorization", host).contentType("application/json")
+                .content(json.writeValueAsString(body))).andExpect(status().isNoContent());
+        mvc.perform(get(path).header("Authorization", runner)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.title").value("바뀐 대결")).andExpect(jsonPath("$.maxParticipants").value(3))
+                .andExpect(jsonPath("$.startsAt").value(body.get("startsAt")))
+                .andExpect(jsonPath("$.participantCount").value(3));
+        jdbc.update("UPDATE races SET cancelled=true WHERE public_id=?", id);
+        mvc.perform(patch(path).header("Authorization", host).contentType("application/json")
+                .content(json.writeValueAsString(body))).andExpect(status().isConflict());
+        jdbc.update("UPDATE races SET cancelled=false WHERE public_id=?", id);
+        jdbc.update("UPDATE races SET starts_at=now() WHERE public_id=?", id);
+        mvc.perform(patch(path).header("Authorization", host).contentType("application/json")
+                .content(json.writeValueAsString(body))).andExpect(status().isConflict());
+    }
+
+    @Test
     void 크루_생성_검색_실제기록_가입신청_승인_권한_양도와_쿨다운() throws Exception {
         JsonNode leader = login("google-a");
         JsonNode applicant = login("google-b");
