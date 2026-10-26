@@ -17,6 +17,8 @@ public class UserSettings {
     private LocalTime runReminderTime = LocalTime.of(7, 0);
     private boolean notifyRace = true;
     private boolean notifyCrew = true;
+    @Column(length = 40)
+    private String representativeBadgeId;
     private Instant updatedAt = Instant.now();
 
     protected UserSettings() {}
@@ -32,6 +34,7 @@ public class UserSettings {
     public LocalTime getRunReminderTime() { return runReminderTime; }
     public boolean isNotifyRace() { return notifyRace; }
     public boolean isNotifyCrew() { return notifyCrew; }
+    public String getRepresentativeBadgeId() { return representativeBadgeId; }
     public void setWeeklyGoalMeters(int value) { weeklyGoalMeters = value; }
     public void setDistanceUnit(String value) { distanceUnit = value; }
     public void setTimeZone(String value) { timeZone = value; }
@@ -40,4 +43,5 @@ public class UserSettings {
     public void setRunReminderTime(LocalTime value) { runReminderTime = value; }
     public void setNotifyRace(boolean value) { notifyRace = value; }
     public void setNotifyCrew(boolean value) { notifyCrew = value; }
+    public void setRepresentativeBadgeId(String value) { representativeBadgeId = value; }
 }

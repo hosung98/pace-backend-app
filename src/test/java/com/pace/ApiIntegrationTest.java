@@ -8,7 +8,7 @@ import com.pace.auth.provider.AppleGrantRevoker;
 import com.pace.user.scheduler.AccountCleanupScheduler;
 import io.zonky.test.db.postgres.embedded.EmbeddedPostgres;
 import java.io.IOException;
-import java.time.Instant;
+import java.time.*;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -50,6 +50,8 @@ class ApiIntegrationTest {
             var pg = EmbeddedPostgres.builder().setPort(0).start();
             new ResourceDatabasePopulator(new FileSystemResource("database/schema.sql")).execute(pg.getPostgresDatabase());
             new ResourceDatabasePopulator(new FileSystemResource("database/community-schema.sql"))
+                    .execute(pg.getPostgresDatabase());
+            new ResourceDatabasePopulator(new FileSystemResource("database/progress-schema.sql"))
                     .execute(pg.getPostgresDatabase());
             return pg;
         } catch (IOException ex) {
@@ -692,5 +694,326 @@ class ApiIntegrationTest {
         mvc.perform(get("/api/v1/races/" + raceId).header("Authorization", hostToken))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.cancelled").value(true))
                 .andExpect(jsonPath("$.participantCount").value(2));
+    }
+
+    @Test
+    void progress_uses_saved_runs_and_existing_weekly_goal_and_keeps_badges() throws Exception {
+        String token = bearer(login("google-a"));
+        mvc.perform(patch("/api/v1/users/me/settings").header("Authorization", token)
+                        .contentType("application/json").content("{\"weeklyGoalMeters\":25000}"))
+                .andExpect(status().isOk());
+
+        ZoneId zone = ZoneId.of("Asia/Seoul");
+        YearMonth month = YearMonth.now(zone);
+        String firstRunId = null;
+        for (int day = 1; day <= 10; day++) {
+            String start = month.atDay(day).atTime(8, 0).atZone(zone).toInstant().toString();
+            JsonNode created = save(token, run("badge-month-" + day, start, 5000, 1800), 201);
+            if (day == 1) firstRunId = created.get("id").asText();
+        }
+        LocalDate monday = LocalDate.now(zone).with(java.time.temporal.TemporalAdjusters
+                .previousOrSame(java.time.DayOfWeek.MONDAY));
+        for (int day = 0; day < 3; day++) {
+            String start = monday.minusWeeks(1).plusDays(day).atTime(8, 0).atZone(zone).toInstant().toString();
+            save(token, run("badge-week-" + day, start, 5000, 1800), 201);
+        }
+        String today = Instant.now().minusSeconds(120).toString();
+        for (int day = 0; day < 3; day++) {
+            save(token, run("badge-today-" + day, today, 5000, 120), 201);
+        }
+        mvc.perform(get("/api/v1/users/me/progress").header("Authorization", token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.totalRuns").value(16))
+                .andExpect(jsonPath("$.totalDistanceKm").value(80.0))
+                .andExpect(jsonPath("$.weeklyGoalKm").value(25.0))
+                .andExpect(jsonPath("$.weeklyRuns").value(3))
+                .andExpect(jsonPath("$.weeklyDistanceKm").value(15.0))
+                .andExpect(jsonPath("$.representativeBadgeId").isEmpty())
+                .andExpect(jsonPath("$.badges.length()").value(10))
+                .andExpect(jsonPath("$.badges[?(@.id == 'monthly10runs')].earnedAt").isNotEmpty())
+                .andExpect(jsonPath("$.badges[?(@.id == 'weekly3days')].earnedAt").isNotEmpty())
+                .andExpect(jsonPath("$.badges[?(@.id == 'total30k')].earnedAt").isNotEmpty())
+                .andExpect(jsonPath("$.personalBests[0].id").value("longest-run"))
+                .andExpect(jsonPath("$.personalBests[0].unit").value("km"))
+                .andExpect(jsonPath("$.personalBests[0].value").value(5.0));
+        mvc.perform(put("/api/v1/users/me/progress/representative-badge").header("Authorization", token)
+                        .contentType("application/json").content("{\"badgeId\":\"first-run\"}"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.representativeBadgeId").value("first-run"));
+        mvc.perform(put("/api/v1/users/me/progress/representative-badge").header("Authorization", token)
+                        .contentType("application/json").content("{\"badgeId\":\"crew-goal\"}"))
+                .andExpect(status().isBadRequest());
+        mvc.perform(put("/api/v1/users/me/progress/representative-badge").header("Authorization", token)
+                        .contentType("application/json").content("{}"))
+                .andExpect(status().isBadRequest());
+        mvc.perform(put("/api/v1/users/me/progress/representative-badge").header("Authorization", token)
+                        .contentType("application/json").content("{\"badgeId\":null}"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.representativeBadgeId").isEmpty());
+        JsonNode savedRun = json.readTree(mvc.perform(get("/api/v1/runs").header("Authorization", token))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString())
+                .at("/items/0");
+        String runId = savedRun.get("id").asText();
+        mvc.perform(get("/api/v1/runs/" + runId + "/reflection").header("Authorization", token))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.effort").isEmpty())
+                .andExpect(jsonPath("$.note").value(""));
+        mvc.perform(put("/api/v1/runs/" + runId + "/reflection").header("Authorization", token)
+                        .contentType("application/json").content("{\"effort\":\"hard\",\"note\":\"Intervals\"}"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.effort").value("hard"))
+                .andExpect(jsonPath("$.note").value("Intervals"));
+        mvc.perform(get("/api/v1/runs/" + runId + "/reflection").header("Authorization", token))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.effort").value("hard"));
+        mvc.perform(put("/api/v1/runs/" + runId + "/reflection").header("Authorization", token)
+                        .contentType("application/json").content("{\"effort\":\"very-hard\",\"note\":\"\"}"))
+                .andExpect(status().isBadRequest());
+        mvc.perform(get("/api/v1/runs/" + runId + "/reflection")
+                        .header("Authorization", bearer(login("google-b"))))
+                .andExpect(status().isNotFound());
+
+        String earnedAt = jdbc.queryForObject(
+                "SELECT earned_at::text FROM user_badges WHERE badge_id='first-run'", String.class);
+        mvc.perform(delete("/api/v1/runs/" + firstRunId).header("Authorization", token))
+                .andExpect(status().isNoContent());
+        mvc.perform(get("/api/v1/users/me/progress").header("Authorization", token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.badges[?(@.id == 'first-run')].earnedAt").isNotEmpty());
+        assertThat(jdbc.queryForObject(
+                "SELECT earned_at::text FROM user_badges WHERE badge_id='first-run'", String.class))
+                .isEqualTo(earnedAt);
+    }
+
+    @Test
+    void crew_monthly_goal_is_leader_editable_and_only_counts_runs_after_join() throws Exception {
+        JsonNode leader = login("google-a");
+        JsonNode member = login("google-b");
+        String leaderToken = bearer(leader);
+        String memberToken = bearer(member);
+        JsonNode crew = json.readTree(mvc.perform(post("/api/v1/crews").header("Authorization", leaderToken)
+                        .contentType("application/json").content("{\"name\":\"월간 목표\",\"intro\":\"\",\"region\":null}"))
+                .andExpect(status().isCreated()).andReturn().getResponse().getContentAsString());
+        String crewId = crew.get("id").asText();
+
+        String beforeJoin = Instant.now().minusSeconds(3600).toString();
+        save(memberToken, run("crew-before-join", beforeJoin, 4000, 1200), 201);
+        mvc.perform(get("/api/v1/crews/" + crewId + "/goal").header("Authorization", memberToken))
+                .andExpect(status().isForbidden());
+        mvc.perform(get("/api/v1/crews/" + crewId + "/goal").header("Authorization", leaderToken))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.targetKm").value(0))
+                .andExpect(jsonPath("$.canEdit").value(true));
+        mvc.perform(put("/api/v1/crews/" + crewId + "/goal").header("Authorization", leaderToken)
+                        .contentType("application/json").content("{\"targetKm\":50}"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.targetKm").value(50));
+        mvc.perform(put("/api/v1/crews/" + crewId + "/goal").header("Authorization", memberToken)
+                        .contentType("application/json").content("{\"targetKm\":50}"))
+                .andExpect(status().isForbidden());
+
+        JsonNode detail = json.readTree(mvc.perform(get("/api/v1/crews/" + crewId)
+                        .header("Authorization", leaderToken))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString());
+        mvc.perform(post("/api/v1/crews/join-by-code").header("Authorization", memberToken)
+                        .contentType("application/json")
+                        .content(json.writeValueAsString(Map.of("code", detail.get("inviteCode").asText()))))
+                .andExpect(status().isOk());
+        String afterJoin = Instant.now().plusSeconds(20).toString();
+        save(memberToken, run("crew-after-join", afterJoin, 1500, 60), 201);
+        save(leaderToken, run("crew-leader-run", afterJoin, 2000, 60), 201);
+        mvc.perform(get("/api/v1/crews/" + crewId + "/goal").header("Authorization", leaderToken))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.totalKm").value(3.5))
+                .andExpect(jsonPath("$.contributors.length()").value(2))
+                .andExpect(jsonPath("$.contributors[?(@.userId == '" + member.at("/user/id").asText()
+                        + "')].distanceKm").value(org.hamcrest.Matchers.contains(1.5)));
+        mvc.perform(put("/api/v1/crews/" + crewId + "/goal").header("Authorization", leaderToken)
+                        .contentType("application/json").content("{\"targetKm\":10001}"))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void crew_goal_badge_requires_real_crossing_and_current_positive_contributors() throws Exception {
+        JsonNode leader = login("google-a");
+        JsonNode member = login("google-b");
+        JsonNode lateMember = login("google-c");
+        String leaderToken = bearer(leader);
+        String memberToken = bearer(member);
+        String crewId = json.readTree(mvc.perform(post("/api/v1/crews").header("Authorization", leaderToken)
+                        .contentType("application/json").content("{\"name\":\"함께 목표\",\"intro\":\"\",\"region\":null}"))
+                .andExpect(status().isCreated()).andReturn().getResponse().getContentAsString()).get("id").asText();
+        String code = jdbc.queryForObject("SELECT invite_code FROM crews WHERE public_id=?", String.class, crewId);
+        for (String token : List.of(memberToken, bearer(lateMember))) {
+            mvc.perform(post("/api/v1/crews/join-by-code").header("Authorization", token)
+                            .contentType("application/json").content(json.writeValueAsString(Map.of("code", code))))
+                    .andExpect(status().isOk());
+        }
+        jdbc.update("UPDATE crew_members SET joined_at=now()-interval '3 hours'");
+        mvc.perform(put("/api/v1/crews/" + crewId + "/goal").header("Authorization", leaderToken)
+                        .contentType("application/json").content("{\"targetKm\":2}"))
+                .andExpect(status().isOk());
+        jdbc.update("UPDATE crew_monthly_goals SET configured_at=now()-interval '2 hours'");
+        String start = Instant.now().minusSeconds(3600).toString();
+        save(leaderToken, run("crew-badge-a", start, 1000, 60), 201);
+        JsonNode crossingRun = save(memberToken, run("crew-badge-b",
+                Instant.now().minusSeconds(3500).toString(), 1000, 60), 201);
+        save(bearer(lateMember), run("crew-zero", start, 0, 60), 201);
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM user_badges WHERE badge_id='crew-goal'", Long.class))
+                .isZero();
+        var executor = java.util.concurrent.Executors.newFixedThreadPool(4);
+        try {
+            var requests = new ArrayList<java.util.concurrent.Future<Integer>>();
+            for (int request = 0; request < 4; request++) {
+                requests.add(executor.submit(() -> mvc.perform(get("/api/v1/crews/" + crewId + "/goal")
+                        .header("Authorization", memberToken)).andReturn().getResponse().getStatus()));
+            }
+            for (var request : requests) {
+                assertThat(request.get(10, java.util.concurrent.TimeUnit.SECONDS)).isEqualTo(200);
+            }
+        } finally {
+            executor.shutdownNow();
+        }
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM user_badges WHERE badge_id='crew-goal'", Long.class))
+                .isEqualTo(2);
+        String earnedAt = jdbc.queryForObject(
+                "SELECT earned_at::text FROM user_badges WHERE badge_id='crew-goal' LIMIT 1", String.class);
+        String completedAt = jdbc.queryForObject("SELECT ended_at::text FROM runs WHERE public_id=?",
+                String.class, crossingRun.get("id").asText());
+        assertThat(earnedAt).isEqualTo(completedAt);
+        save(bearer(lateMember), run("crew-late-contribution", start, 1000, 60), 201);
+        mvc.perform(get("/api/v1/crews/" + crewId + "/goal").header("Authorization", leaderToken))
+                .andExpect(status().isOk());
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM user_badges WHERE badge_id='crew-goal'", Long.class))
+                .isEqualTo(2);
+
+        // Lowering a target below accumulated distance cannot mint rewards for later contributors.
+        mvc.perform(put("/api/v1/crews/" + crewId + "/goal").header("Authorization", leaderToken)
+                        .contentType("application/json").content("{\"targetKm\":1}"))
+                .andExpect(status().isOk());
+        mvc.perform(get("/api/v1/crews/" + crewId + "/goal").header("Authorization", leaderToken))
+                .andExpect(status().isOk());
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM user_badges WHERE badge_id='crew-goal'", Long.class))
+                .isEqualTo(2);
+        jdbc.update("UPDATE crew_monthly_goals SET month_start=(month_start-interval '1 month')::date");
+        mvc.perform(get("/api/v1/users/me/progress").header("Authorization", memberToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.badges[?(@.id == 'crew-goal')].progress")
+                        .value(org.hamcrest.Matchers.contains(1)));
+        mvc.perform(put("/api/v1/users/me/progress/representative-badge").header("Authorization", memberToken)
+                        .contentType("application/json").content("{\"badgeId\":\"crew-goal\"}"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.representativeBadgeId").value("crew-goal"));
+    }
+
+    @Test
+    void progress_migration_replay_preserves_existing_data_and_legacy_goals_are_not_rewarded() throws Exception {
+        String token = bearer(login("google-a"));
+        save(token, run("before-migration-replay", "2026-01-01T01:00:00Z", 5000, 1800), 201);
+        String crewId = json.readTree(mvc.perform(post("/api/v1/crews").header("Authorization", token)
+                        .contentType("application/json").content("{\"name\":\"기존 목표\",\"intro\":\"\",\"region\":null}"))
+                .andExpect(status().isCreated()).andReturn().getResponse().getContentAsString()).get("id").asText();
+        mvc.perform(put("/api/v1/crews/" + crewId + "/goal").header("Authorization", token)
+                        .contentType("application/json").content("{\"targetKm\":5}"))
+                .andExpect(status().isOk());
+        jdbc.execute("ALTER TABLE crew_monthly_goals DROP COLUMN configured_at, "
+                + "DROP COLUMN reward_eligible, DROP COLUMN attained_at");
+        for (int replay = 0; replay < 2; replay++) {
+            new ResourceDatabasePopulator(new FileSystemResource("database/progress-schema.sql"))
+                    .execute(jdbc.getDataSource());
+        }
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM runs", Long.class)).isEqualTo(1);
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM user_badges", Long.class)).isEqualTo(3);
+        assertThat(jdbc.queryForObject("SELECT target_km FROM crew_monthly_goals", Integer.class)).isEqualTo(5);
+        assertThat(jdbc.queryForObject("SELECT reward_eligible FROM crew_monthly_goals", Boolean.class)).isFalse();
+        mvc.perform(get("/api/v1/crews/" + crewId + "/goal").header("Authorization", token))
+                .andExpect(status().isOk());
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM user_badges WHERE badge_id='crew-goal'", Long.class))
+                .isZero();
+    }
+
+    @Test
+    void imported_historical_runs_cannot_retroactively_award_a_new_crew_goal() throws Exception {
+        String token = bearer(login("google-a"));
+        String crewId = json.readTree(mvc.perform(post("/api/v1/crews").header("Authorization", token)
+                        .contentType("application/json").content("{\"name\":\"새 도전\",\"intro\":\"\",\"region\":null}"))
+                .andExpect(status().isCreated()).andReturn().getResponse().getContentAsString()).get("id").asText();
+        jdbc.update("UPDATE crew_members SET joined_at=now()-interval '3 hours'");
+        mvc.perform(put("/api/v1/crews/" + crewId + "/goal").header("Authorization", token)
+                        .contentType("application/json").content("{\"targetKm\":1}"))
+                .andExpect(status().isOk());
+        jdbc.update("UPDATE crew_monthly_goals SET configured_at=now()-interval '2 minutes'");
+        save(token, run("late-historical-import", Instant.now().minusSeconds(7200).toString(), 1000, 60), 201);
+        mvc.perform(get("/api/v1/crews/" + crewId + "/goal").header("Authorization", token))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.totalKm").value(1.0));
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM user_badges WHERE badge_id='crew-goal'", Long.class))
+                .isZero();
+        save(token, run("actual-new-contribution", Instant.now().minusSeconds(90).toString(), 1000, 60), 201);
+        mvc.perform(get("/api/v1/crews/" + crewId + "/goal").header("Authorization", token))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.totalKm").value(2.0));
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM user_badges WHERE badge_id='crew-goal'", Long.class))
+                .isEqualTo(1);
+    }
+
+    @Test
+    void completion_progress_get_awards_crew_badge_without_visiting_crew_goal() throws Exception {
+        String token = bearer(login("google-a"));
+        String crewId = json.readTree(mvc.perform(post("/api/v1/crews").header("Authorization", token)
+                        .contentType("application/json").content("{\"name\":\"완료 보상\",\"intro\":\"\",\"region\":null}"))
+                .andExpect(status().isCreated()).andReturn().getResponse().getContentAsString()).get("id").asText();
+        jdbc.update("UPDATE crew_members SET joined_at=now()-interval '3 hours'");
+        mvc.perform(put("/api/v1/crews/" + crewId + "/goal").header("Authorization", token)
+                        .contentType("application/json").content("{\"targetKm\":1}"))
+                .andExpect(status().isOk());
+        jdbc.update("UPDATE crew_monthly_goals SET configured_at=now()-interval '2 hours'");
+        JsonNode crossing = save(token,
+                run("completion-crew-crossing", Instant.now().minusSeconds(3600).toString(), 1000, 60), 201);
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM user_badges WHERE badge_id='crew-goal'", Long.class))
+                .isZero();
+        for (int read = 0; read < 2; read++) {
+            mvc.perform(get("/api/v1/users/me/progress").header("Authorization", token))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.badges[?(@.id == 'crew-goal')].progress")
+                            .value(org.hamcrest.Matchers.contains(1)))
+                    .andExpect(jsonPath("$.badges[?(@.id == 'crew-goal')].earnedAt").isNotEmpty());
+        }
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM user_badges WHERE badge_id='crew-goal'", Long.class))
+                .isEqualTo(1);
+        assertThat(jdbc.queryForObject("SELECT earned_at::text FROM user_badges WHERE badge_id='crew-goal'",
+                String.class)).isEqualTo(jdbc.queryForObject("SELECT ended_at::text FROM runs WHERE public_id=?",
+                String.class, crossing.get("id").asText()));
+    }
+
+    @Test
+    void personal_bests_use_original_timestamped_route_and_keep_first_ties() throws Exception {
+        String token = bearer(login("google-a"));
+        Instant firstStart = Instant.parse("2026-01-01T01:00:00Z");
+        String firstId = null;
+        for (int attempt = 0; attempt < 2; attempt++) {
+            Instant start = firstStart.plusSeconds(attempt * 3600L);
+            var request = new java.util.HashMap<>(run("accurate-pb-" + attempt, start.toString(), 5000, 300));
+            var points = new ArrayList<Map<String, Object>>();
+            for (int index = 0; index <= 10; index++) {
+                points.add(Map.of("recordedAt", start.plusSeconds(index * 25L).toString(),
+                        "latitude", 0.0, "longitude", Math.toDegrees(index * 100.1 / 6371000),
+                        "accuracyMeters", 5));
+            }
+            request.put("routePoints", points);
+            JsonNode saved = save(token, request, 201);
+            if (attempt == 0) firstId = saved.get("id").asText();
+        }
+        save(token, run("aggregate-only-not-a-split", "2026-01-02T01:00:00Z", 10000, 100), 201);
+        JsonNode progress = json.readTree(mvc.perform(get("/api/v1/users/me/progress")
+                        .header("Authorization", token))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString());
+        assertThat(progress.get("personalBests")).hasSize(2);
+        JsonNode fastest = progress.get("personalBests").get(1);
+        assertThat(fastest.get("id").asText()).isEqualTo("fastest-1km");
+        assertThat(fastest.get("title").asText()).isEqualTo("가장 빠른 1km");
+        assertThat(fastest.get("runId").asText()).isEqualTo(firstId);
+        assertThat(fastest.get("achievedAt").asText()).isEqualTo(firstStart.plusSeconds(300).toString());
+        assertThat(fastest.get("unit").asText()).isEqualTo("seconds");
+        assertThat(fastest.get("value").asDouble()).isEqualTo(249.75);
+        String longestOwner = progress.get("personalBests").get(0).get("runId").asText();
+        save(token, run("tied-longest", "2026-01-03T01:00:00Z", 10000, 100), 201);
+        mvc.perform(get("/api/v1/users/me/progress").header("Authorization", token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.personalBests[0].runId").value(longestOwner));
+        mvc.perform(delete("/api/v1/runs/" + firstId).header("Authorization", token))
+                .andExpect(status().isNoContent());
+        mvc.perform(get("/api/v1/users/me/progress").header("Authorization", token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.personalBests[1].runId").value(org.hamcrest.Matchers.not(firstId)));
     }
 }

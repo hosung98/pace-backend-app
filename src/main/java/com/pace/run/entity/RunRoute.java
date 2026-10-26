@@ -26,6 +26,8 @@ public class RunRoute {
     private Double maxLng;
 
     protected RunRoute() {}
+    public Long getRunId() { return runId; }
+    public List<RoutePoint> getPoints() { return List.copyOf(points); }
     public RunRoute(long runId, List<RoutePoint> points) {
         this.runId = runId;
         this.points = points;

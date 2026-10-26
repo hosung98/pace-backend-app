@@ -11,6 +11,7 @@ import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.*;
 import com.pace.run.dto.*;
 import com.pace.run.service.RunService;
+import com.pace.run.service.RunReflectionService;
 
 /** 러닝 요청을 검증하고 비즈니스 처리는 서비스에 위임합니다. */
 @RestController
@@ -18,7 +19,11 @@ import com.pace.run.service.RunService;
 @Tag(name = "러닝", description = "본인 기록 저장·조회·삭제·복구")
 public class RunController {
     private final RunService service;
-    public RunController(RunService service) { this.service = service; }
+    private final RunReflectionService reflections;
+    public RunController(RunService service, RunReflectionService reflections) {
+        this.service = service;
+        this.reflections = reflections;
+    }
 
     @PostMapping
     @Operation(summary = "러닝 저장", description = "최초 저장은 201, 동일한 재요청은 200, 내용이 다른 재요청은 409를 반환합니다.")
@@ -62,5 +67,16 @@ public class RunController {
     @Operation(summary = "삭제 후 24시간 이내 러닝 복구")
     public RunDetailResponse restore(@AuthenticationPrincipal Jwt jwt, @PathVariable String runId) {
         return service.restore(jwt.getSubject(), runId);
+    }
+
+    @GetMapping("/{runId}/reflection")
+    public RunReflectionResponse reflection(@AuthenticationPrincipal Jwt jwt, @PathVariable String runId) {
+        return reflections.get(jwt.getSubject(), runId);
+    }
+
+    @PutMapping("/{runId}/reflection")
+    public RunReflectionResponse reflection(@AuthenticationPrincipal Jwt jwt, @PathVariable String runId,
+                                            @Valid @RequestBody RunReflectionRequest request) {
+        return reflections.update(jwt.getSubject(), runId, request);
     }
 }

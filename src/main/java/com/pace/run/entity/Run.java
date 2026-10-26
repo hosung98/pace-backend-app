@@ -49,6 +49,11 @@ public class Run {
     void touch() { updatedAt = Instant.now(); }
     public Long getId() { return id; }
     public String getPublicId() { return publicId; }
+    public Long getUserId() { return userId; }
+    public Instant getStartedAt() { return startedAt; }
+    public Instant getEndedAt() { return endedAt; }
+    public int getDurationSeconds() { return durationSeconds; }
+    public int getDistanceMeters() { return distanceMeters; }
     public String getRequestHash() { return requestHash; }
     public Instant getDeletedAt() { return deletedAt; }
     public void setTitle(String value) { title = value; }

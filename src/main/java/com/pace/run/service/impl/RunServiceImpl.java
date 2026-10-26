@@ -12,6 +12,7 @@ import com.pace.run.service.RunService;
 import com.pace.run.util.RouteGeometry;
 import com.pace.run.vo.IdempotencyKey;
 import com.pace.run.vo.RunCursor;
+import com.pace.progress.service.ProgressService;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
@@ -30,15 +31,17 @@ public class RunServiceImpl implements RunService {
     private final RunQueryMapper queries;
     private final UserAccess access;
     private final JsonCodec json;
+    private final ProgressService progress;
 
     public RunServiceImpl(RunRepository runs, RouteRepository routes, RequestKeyRepository keys,
-                      RunQueryMapper queries, UserAccess access, JsonCodec json) {
+                      RunQueryMapper queries, UserAccess access, JsonCodec json, ProgressService progress) {
         this.runs = runs;
         this.routes = routes;
         this.keys = keys;
         this.queries = queries;
         this.access = access;
         this.json = json;
+        this.progress = progress;
     }
 
     @Transactional
@@ -62,6 +65,7 @@ public class RunServiceImpl implements RunService {
         Run run = runs.saveAndFlush(new Run(userId, request, hash));
         RunRoute route = routes.save(new RunRoute(run.getId(), request.routePoints()));
         if (keyValue != null) keys.save(new RunRequestKey(userId, keyValue, run.getId()));
+        progress.recordAchievements(userId);
         double gpsDistance = RouteGeometry.distance(request.routePoints());
         if (request.routePoints().size() > 1
                 && Math.abs(gpsDistance - request.distanceMeters()) > Math.max(1, request.distanceMeters() * 0.1)) {
