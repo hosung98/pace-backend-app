@@ -92,11 +92,19 @@ CREATE TRIGGER trg_snapshot_race_deadline_before_participant_delete
 BEFORE DELETE ON race_participants
 FOR EACH ROW EXECUTE FUNCTION snapshot_race_deadline_before_participant_delete();
 
+CREATE TABLE shedlock (
+    name VARCHAR(64) NOT NULL PRIMARY KEY,
+    lock_until TIMESTAMPTZ NOT NULL,
+    locked_at TIMESTAMPTZ NOT NULL,
+    locked_by VARCHAR(255) NOT NULL
+);
+
 COMMENT ON TABLE community_user_state IS '크루 재가입 제한을 위한 사용자별 상태';
 COMMENT ON TABLE crews IS '러닝 크루와 크루장·초대 코드';
 COMMENT ON TABLE crew_members IS '사용자당 하나의 크루 멤버십';
 COMMENT ON TABLE crew_join_requests IS '사용자당 하나의 대기 중인 가입 신청';
 COMMENT ON TABLE races IS '러닝 대결 모집과 일정';
 COMMENT ON TABLE race_participants IS '대결 참가자. 실제 결과 등록은 별도 기능';
+COMMENT ON TABLE shedlock IS '멀티 인스턴스 스케줄 중복 실행 방지용 분산 락';
 
 COMMIT;
