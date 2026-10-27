@@ -8,6 +8,7 @@ import java.time.Duration;
 import java.util.Arrays;
 import java.util.Set;
 import java.util.stream.Collectors;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.web.client.RestTemplateBuilder;
 import org.springframework.security.oauth2.core.DelegatingOAuth2TokenValidator;
@@ -27,6 +28,7 @@ public class AppleVerifier {
     private final NimbusJwtDecoder decoder;
 
     /** 운영 설정에서 허용한 audience 목록으로 검증기를 초기화합니다. */
+    @Autowired
     public AppleVerifier(@Value("${pace.apple-client-ids}") String clientIds) {
         this(clientIds, "https://appleid.apple.com/auth/keys");
     }

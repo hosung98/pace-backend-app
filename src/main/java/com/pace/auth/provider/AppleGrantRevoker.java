@@ -13,6 +13,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Map;
 import java.util.stream.Collectors;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
@@ -30,6 +31,7 @@ public class AppleGrantRevoker {
             .followRedirects(HttpClient.Redirect.NEVER).build();
 
     /** 환경 변수 기반 Apple revoke 설정으로 런타임 인스턴스를 생성합니다. */
+    @Autowired
     public AppleGrantRevoker(@Value("${pace.apple-client-id}") String clientId,
                              @Value("${pace.apple-client-secret}") String clientSecret,
                              AppleVerifier verifier, ObjectMapper json) {

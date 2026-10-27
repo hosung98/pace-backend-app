@@ -60,6 +60,14 @@ pace:
     account-cleanup:
       lock-at-most-for: ${PACE_ACCOUNT_CLEANUP_LOCK_AT_MOST_FOR:PT2M}
       lock-at-least-for: ${PACE_ACCOUNT_CLEANUP_LOCK_AT_LEAST_FOR:PT0S}
+  rate-limit:
+    enabled: ${PACE_RATE_LIMIT_ENABLED:true}
+    max-requests: ${PACE_RATE_LIMIT_MAX_REQUESTS:5000}
+    window-seconds: ${PACE_RATE_LIMIT_WINDOW_SECONDS:60}
+  request-body-cache:
+    enabled: ${PACE_REQUEST_BODY_CACHE_ENABLED:true}
+    max-payload-bytes: ${PACE_REQUEST_BODY_CACHE_MAX_PAYLOAD_BYTES:1048576}
+    max-log-chars: ${PACE_REQUEST_BODY_CACHE_MAX_LOG_CHARS:2048}
 mybatis:
   mapper-locations: classpath:mapper/*.xml
   configuration:
