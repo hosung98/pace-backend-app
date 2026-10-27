@@ -1,6 +1,7 @@
 package com.pace.crew.repository;
 
 import com.pace.crew.entity.Crew;
+import java.time.Instant;
 import java.util.*;
 import org.springframework.data.jpa.repository.*;
 import org.springframework.data.repository.query.Param;
@@ -35,8 +36,8 @@ public interface CrewRepository extends JpaRepository<Crew, Long> {
          ORDER BY COALESCE(SUM(r.distance_meters), 0) DESC, c.created_at ASC
         """, nativeQuery = true)
     List<CrewListRow> search(@Param("viewerId") long viewerId, @Param("query") String query,
-                             @Param("sido") String sido, @Param("sigungu") String sigungu,
-                             @Param("periodStart") java.time.Instant periodStart);
+                              @Param("sido") String sido, @Param("sigungu") String sigungu,
+                              @Param("periodStart") Instant periodStart);
 
     @Query(value = """
         SELECT c.id AS crewId, c.public_id AS id, c.name AS name, c.intro AS intro,
@@ -54,7 +55,7 @@ public interface CrewRepository extends JpaRepository<Crew, Long> {
          ORDER BY COALESCE(SUM(r.distance_meters), 0) DESC, c.created_at ASC
         """, nativeQuery = true)
     List<CrewListRow> rankings(@Param("viewerId") long viewerId,
-                               @Param("periodStart") java.time.Instant periodStart);
+                               @Param("periodStart") Instant periodStart);
 
     @Query(value = """
         SELECT u.public_id AS userId, u.nickname AS nickname, cm.role AS role,
@@ -68,7 +69,7 @@ public interface CrewRepository extends JpaRepository<Crew, Long> {
          ORDER BY COALESCE(SUM(r.distance_meters), 0) DESC, u.nickname
         """, nativeQuery = true)
     List<CrewMemberRow> memberStats(@Param("crewId") long crewId, @Param("viewerId") long viewerId,
-                                    @Param("periodStart") java.time.Instant periodStart);
+                                    @Param("periodStart") Instant periodStart);
 
     @Query(value = "SELECT nickname FROM users WHERE id=:userId", nativeQuery = true)
     String nickname(@Param("userId") long userId);

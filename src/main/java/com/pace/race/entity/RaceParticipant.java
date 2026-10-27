@@ -3,6 +3,7 @@ package com.pace.race.entity;
 import jakarta.persistence.*;
 import java.io.Serializable;
 import java.time.Instant;
+import java.util.Objects;
 
 @Entity
 @Table(name = "race_participants")
@@ -25,9 +26,9 @@ public class RaceParticipant {
         public Key() {}
         public Key(Long raceId, Long userId) { this.raceId = raceId; this.userId = userId; }
         @Override public boolean equals(Object other) {
-            return other instanceof Key key && java.util.Objects.equals(raceId, key.raceId)
-                    && java.util.Objects.equals(userId, key.userId);
+            return other instanceof Key key && Objects.equals(raceId, key.raceId)
+                    && Objects.equals(userId, key.userId);
         }
-        @Override public int hashCode() { return java.util.Objects.hash(raceId, userId); }
+        @Override public int hashCode() { return Objects.hash(raceId, userId); }
     }
 }

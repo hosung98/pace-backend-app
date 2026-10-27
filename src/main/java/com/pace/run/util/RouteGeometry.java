@@ -1,9 +1,11 @@
 package com.pace.run.util;
 
 import com.pace.common.exception.BusinessException;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import org.springframework.http.HttpStatus;
 import com.pace.run.dto.CreateRunRequest;
 import com.pace.run.vo.RoutePoint;
 import com.pace.run.vo.RouteBounds;
@@ -13,13 +15,13 @@ public final class RouteGeometry {
 
     public static void validate(CreateRunRequest request) {
         if (request.routePoints().size() > 20000) {
-            throw new BusinessException(org.springframework.http.HttpStatus.PAYLOAD_TOO_LARGE,
+            throw new BusinessException(HttpStatus.PAYLOAD_TOO_LARGE,
                     "PAYLOAD_TOO_LARGE", "경로 포인트는 20,000개를 초과할 수 없습니다.");
         }
         Instant future = Instant.now().plusSeconds(300);
         if (request.endedAt().isBefore(request.startedAt())
                 || request.endedAt().isAfter(future) || request.startedAt().isAfter(future)
-                || request.durationSeconds() > java.time.Duration.between(request.startedAt(), request.endedAt()).getSeconds()) {
+                || request.durationSeconds() > Duration.between(request.startedAt(), request.endedAt()).getSeconds()) {
             throw BusinessException.invalid("러닝 시작·종료 시각 또는 소요 시간이 올바르지 않습니다.");
         }
         Instant previous = request.startedAt();

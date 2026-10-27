@@ -4,6 +4,7 @@ import jakarta.persistence.*;
 import java.io.Serializable;
 import java.time.LocalDate;
 import java.time.Instant;
+import java.util.Objects;
 
 @Entity
 @Table(name = "crew_monthly_goals")
@@ -55,9 +56,9 @@ public class CrewMonthlyGoal {
         public Key() {}
         public Key(Long crewId, LocalDate monthStart) { this.crewId = crewId; this.monthStart = monthStart; }
         @Override public boolean equals(Object other) {
-            return other instanceof Key key && java.util.Objects.equals(crewId, key.crewId)
-                    && java.util.Objects.equals(monthStart, key.monthStart);
+            return other instanceof Key key && Objects.equals(crewId, key.crewId)
+                    && Objects.equals(monthStart, key.monthStart);
         }
-        @Override public int hashCode() { return java.util.Objects.hash(crewId, monthStart); }
+        @Override public int hashCode() { return Objects.hash(crewId, monthStart); }
     }
 }

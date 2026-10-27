@@ -9,6 +9,7 @@ import com.pace.run.repository.RunReflectionRepository;
 import com.pace.run.repository.RunRepository;
 import com.pace.run.service.RunReflectionService;
 import com.pace.user.service.UserAccess;
+import java.util.Optional;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -52,7 +53,7 @@ public class RunReflectionServiceImpl implements RunReflectionService {
         return run;
     }
 
-    private java.util.Optional<Run> lockedRun(long userId, String publicId) {
+    private Optional<Run> lockedRun(long userId, String publicId) {
         return runs.lockByUserIdAndPublicId(userId, publicId);
     }
 }

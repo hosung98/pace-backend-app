@@ -14,6 +14,7 @@ import com.pace.user.repository.SettingsRepository;
 import com.pace.user.repository.UserRepository;
 import com.pace.user.service.UserAccess;
 import com.pace.crew.service.CrewGoalService;
+import com.pace.common.exception.BusinessException;
 import java.time.*;
 import java.time.temporal.TemporalAdjusters;
 import java.util.*;
@@ -88,7 +89,7 @@ public class ProgressServiceImpl implements ProgressService {
     public UserProgressResponse setRepresentativeBadge(String subject, String badgeId) {
         long userId = access.id(subject, true);
         if (badgeId != null && !badges.existsById(new UserBadge.Key(userId, badgeId))) {
-            throw com.pace.common.exception.BusinessException.invalid("아직 획득하지 않은 배지는 대표 배지로 설정할 수 없습니다.");
+            throw BusinessException.invalid("아직 획득하지 않은 배지는 대표 배지로 설정할 수 없습니다.");
         }
         settings.findById(userId).orElseThrow().setRepresentativeBadgeId(badgeId);
         return progress(subject);

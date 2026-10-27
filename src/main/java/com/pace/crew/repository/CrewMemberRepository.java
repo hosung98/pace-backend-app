@@ -1,6 +1,7 @@
 package com.pace.crew.repository;
 
 import com.pace.crew.entity.CrewMember;
+import java.time.Instant;
 import java.util.*;
 import org.springframework.data.jpa.repository.*;
 import org.springframework.data.repository.query.Param;
@@ -31,8 +32,8 @@ public interface CrewMemberRepository extends JpaRepository<CrewMember, CrewMemb
         """, nativeQuery = true)
     List<CrewGoalContributorRow> monthlyContributors(@Param("crewId") long crewId,
                                                      @Param("viewerId") long viewerId,
-                                                     @Param("monthStart") java.time.Instant monthStart,
-                                                     @Param("monthEnd") java.time.Instant monthEnd);
+                                                     @Param("monthStart") Instant monthStart,
+                                                     @Param("monthEnd") Instant monthEnd);
 
     @Query(value = """
         SELECT r.user_id AS userId, r.distance_meters AS distanceMeters, r.ended_at AS endedAt
@@ -45,8 +46,8 @@ public interface CrewMemberRepository extends JpaRepository<CrewMember, CrewMemb
          ORDER BY r.ended_at, r.id
         """, nativeQuery = true)
     List<CrewGoalRunRow> rewardRuns(@Param("crewId") long crewId,
-                                    @Param("monthStart") java.time.Instant monthStart,
-                                    @Param("monthEnd") java.time.Instant monthEnd,
-                                    @Param("configuredAt") java.time.Instant configuredAt,
-                                    @Param("now") java.time.Instant now);
+                                    @Param("monthStart") Instant monthStart,
+                                    @Param("monthEnd") Instant monthEnd,
+                                    @Param("configuredAt") Instant configuredAt,
+                                    @Param("now") Instant now);
 }

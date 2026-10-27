@@ -2,6 +2,8 @@ package com.pace.auth.entity;
 
 import jakarta.persistence.*;
 import java.time.Instant;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 @Entity
 @Table(name = "refresh_tokens")
@@ -9,7 +11,7 @@ public class RefreshToken {
     @Id @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
     private Long userId;
-    @org.hibernate.annotations.JdbcTypeCode(org.hibernate.type.SqlTypes.CHAR)
+    @JdbcTypeCode(SqlTypes.CHAR)
     @Column(columnDefinition = "char(64)", length = 64)
     private String tokenHash;
     private String familyId;

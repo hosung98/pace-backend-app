@@ -16,7 +16,7 @@ import org.springframework.security.oauth2.jose.jws.SignatureAlgorithm;
 import org.springframework.security.oauth2.jwt.*;
 import org.springframework.stereotype.Component;
 
-@Component
+    @Component
 public class AppleVerifier {
     private final NimbusJwtDecoder decoder;
 

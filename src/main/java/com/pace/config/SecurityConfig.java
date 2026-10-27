@@ -11,7 +11,8 @@ import java.util.Arrays;
 import java.util.Base64;
 import java.util.List;
 import javax.crypto.spec.SecretKeySpec;
-import org.slf4j.LoggerFactory;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -35,6 +36,8 @@ import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 /** 무상태 JWT 인증과 명시적인 공개 경로·CORS 정책을 구성합니다. */
 @Configuration
 public class SecurityConfig {
+    private static final Logger log = LogManager.getLogger(SecurityConfig.class);
+
     /** 운영에서는 외부 주입 키만 허용하고 로컬에서만 임시 키를 생성합니다. */
     @Bean
     SecretKeySpec jwtKey(@Value("${pace.jwt-secret}") String secret, Environment environment) {
@@ -42,8 +45,7 @@ public class SecurityConfig {
         if (secret.isBlank() && environment.acceptsProfiles(Profiles.of("local"))) {
             bytes = new byte[32];
             new SecureRandom().nextBytes(bytes);
-            LoggerFactory.getLogger(SecurityConfig.class)
-                    .warn("로컬 전용 임시 JWT 키를 사용합니다. 서버 재시작 시 토큰이 무효화됩니다.");
+            log.warn("로컬 전용 임시 JWT 키를 사용합니다. 서버 재시작 시 토큰이 무효화됩니다.");
         } else {
             try {
                 bytes = Base64.getDecoder().decode(secret);

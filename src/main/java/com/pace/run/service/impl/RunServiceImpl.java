@@ -14,17 +14,28 @@ import com.pace.run.vo.IdempotencyKey;
 import com.pace.run.vo.RunCursor;
 import com.pace.progress.service.ProgressService;
 import java.nio.charset.StandardCharsets;
+import java.time.DateTimeException;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.Base64;
 import java.util.List;
 import java.util.Set;
-import org.slf4j.LoggerFactory;
+import lombok.RequiredArgsConstructor;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 @Service
+@RequiredArgsConstructor
 public class RunServiceImpl implements RunService {
+    private static final Logger log = LogManager.getLogger(RunServiceImpl.class);
+    private static final int MIN_LIST_LIMIT = 1;
+    private static final int MAX_LIST_LIMIT = 50;
+    private static final int RESTORE_WINDOW_HOURS = 24;
+    private static final int MAX_CURSOR_LENGTH = 256;
+    private static final Set<String> ALLOWED_ROUTE_MODES = Set.of("simplified", "full", "none");
+
     private final RunRepository runs;
     private final RouteRepository routes;
     private final RequestKeyRepository keys;
@@ -33,19 +44,9 @@ public class RunServiceImpl implements RunService {
     private final JsonCodec json;
     private final ProgressService progress;
 
-    public RunServiceImpl(RunRepository runs, RouteRepository routes, RequestKeyRepository keys,
-                      RunQueryMapper queries, UserAccess access, JsonCodec json, ProgressService progress) {
-        this.runs = runs;
-        this.routes = routes;
-        this.keys = keys;
-        this.queries = queries;
-        this.access = access;
-        this.json = json;
-        this.progress = progress;
-    }
-
     @Transactional
     public CreateRunResult create(String subject, CreateRunRequest request, String key) {
+        log.debug("러닝 저장 진입: userId={}, clientRunId={}", subject, request.clientRunId());
         RouteGeometry.validate(request);
         IdempotencyKey idempotencyKey = IdempotencyKey.fromNullable(key);
         String keyValue = idempotencyKey == null ? null : idempotencyKey.value();
@@ -54,12 +55,16 @@ public class RunServiceImpl implements RunService {
         String hash = TokenHash.sha256(json.write(request));
         if (keyValue != null) {
             var saved = keys.findById(new RunRequestKey.Key(userId, keyValue));
-            if (saved.isPresent()) return replay(runs.findById(saved.get().getRunId()).orElseThrow(), hash);
+            if (saved.isPresent()) {
+                log.info("러닝 멱등 재요청 재생: userId={}, clientRunId={}", subject, request.clientRunId());
+                return replay(runs.findById(saved.get().getRunId()).orElseThrow(), hash);
+            }
         }
         var existing = runs.findByUserIdAndClientRunId(userId, request.clientRunId());
         if (existing.isPresent()) {
             CreateRunResult replay = replay(existing.get(), hash);
             if (keyValue != null) keys.save(new RunRequestKey(userId, keyValue, existing.get().getId()));
+            log.info("러닝 기존 기록 재사용: userId={}, runId={}", subject, existing.get().getPublicId());
             return replay;
         }
         Run run = runs.saveAndFlush(new Run(userId, request, hash));
@@ -69,11 +74,13 @@ public class RunServiceImpl implements RunService {
         double gpsDistance = RouteGeometry.distance(request.routePoints());
         if (request.routePoints().size() > 1
                 && Math.abs(gpsDistance - request.distanceMeters()) > Math.max(1, request.distanceMeters() * 0.1)) {
-            LoggerFactory.getLogger(RunServiceImpl.class).warn(
+            log.warn(
                     "클라이언트 거리와 GPS 계산 거리가 10% 이상 다릅니다. runId={}, clientMeters={}, gpsMeters={}",
                     run.getPublicId(), request.distanceMeters(), Math.round(gpsDistance));
         }
-        return new CreateRunResult(true, detail(run, route.response("simplified")));
+        CreateRunResult result = new CreateRunResult(true, detail(run, route.response("simplified")));
+        log.info("러닝 저장 완료: userId={}, runId={}", subject, run.getPublicId());
+        return result;
     }
 
     private CreateRunResult replay(Run run, String hash) {
@@ -84,7 +91,10 @@ public class RunServiceImpl implements RunService {
 
     @Transactional(readOnly = true)
     public RunListResponse list(String subject, String cursor, int limit) {
-        if (limit < 1 || limit > 50) throw BusinessException.invalid("limit은 1~50 범위여야 합니다.");
+        log.debug("러닝 목록 조회 진입: userId={}, hasCursor={}, limit={}", subject, cursor != null, limit);
+        if (limit < MIN_LIST_LIMIT || limit > MAX_LIST_LIMIT) {
+            throw BusinessException.invalid("limit은 1~50 범위여야 합니다.");
+        }
         long userId = access.id(subject, false);
         RunCursor after = cursor == null ? null : decode(cursor);
         List<RunRow> rows = queries.list(userId, after == null ? null : after.startedAt(),
@@ -92,36 +102,50 @@ public class RunServiceImpl implements RunService {
         boolean more = rows.size() > limit;
         List<RunRow> page = rows.subList(0, Math.min(limit, rows.size()));
         String next = more ? encode(page.getLast()) : null;
-        return new RunListResponse(page.stream().map(RunRow::toResponse).toList(), next);
+        RunListResponse response = new RunListResponse(page.stream().map(RunRow::toResponse).toList(), next);
+        log.debug("러닝 목록 조회 완료: userId={}, itemCount={}, hasNext={}", subject, response.items().size(), response.nextCursor() != null);
+        return response;
     }
 
     @Transactional(readOnly = true)
     public RunDetailResponse detail(String subject, String publicId, String mode) {
-        if (!Set.of("simplified", "full", "none").contains(mode)) throw BusinessException.invalid("경로 형식이 올바르지 않습니다.");
+        log.debug("러닝 상세 조회 진입: userId={}, runId={}, mode={}", subject, publicId, mode);
+        if (!ALLOWED_ROUTE_MODES.contains(mode)) throw BusinessException.invalid("경로 형식이 올바르지 않습니다.");
         Run run = find(access.id(subject, false), publicId, false);
-        return detail(run, mode.equals("none") ? null : routes.findById(run.getId()).orElseThrow().response(mode));
+        RunDetailResponse response = detail(run, mode.equals("none") ? null : routes.findById(run.getId()).orElseThrow().response(mode));
+        log.debug("러닝 상세 조회 완료: userId={}, runId={}", subject, publicId);
+        return response;
     }
 
     @Transactional
     public RunDetailResponse title(String subject, String publicId, String title) {
+        log.debug("러닝 제목 수정 진입: userId={}, runId={}", subject, publicId);
         Run run = find(access.id(subject, true), publicId, false);
         run.setTitle(title);
-        return detail(run, routes.findById(run.getId()).orElseThrow().response("simplified"));
+        RunDetailResponse response = detail(run, routes.findById(run.getId()).orElseThrow().response("simplified"));
+        log.info("러닝 제목 수정 완료: userId={}, runId={}", subject, publicId);
+        return response;
     }
 
     @Transactional
     public void delete(String subject, String publicId) {
+        log.debug("러닝 삭제 진입: userId={}, runId={}", subject, publicId);
         find(access.id(subject, true), publicId, true).delete();
+        log.info("러닝 삭제 완료: userId={}, runId={}", subject, publicId);
     }
 
     @Transactional
     public RunDetailResponse restore(String subject, String publicId) {
+        log.debug("러닝 복구 진입: userId={}, runId={}", subject, publicId);
         Run run = find(access.id(subject, true), publicId, true);
-        if (run.getDeletedAt() != null && run.getDeletedAt().isBefore(Instant.now().minus(24, ChronoUnit.HOURS))) {
+        if (run.getDeletedAt() != null
+                && run.getDeletedAt().isBefore(Instant.now().minus(RESTORE_WINDOW_HOURS, ChronoUnit.HOURS))) {
             throw BusinessException.conflict("기록은 삭제 후 24시간 이내에만 복구할 수 있습니다.");
         }
         run.restore();
-        return detail(run, routes.findById(run.getId()).orElseThrow().response("simplified"));
+        RunDetailResponse response = detail(run, routes.findById(run.getId()).orElseThrow().response("simplified"));
+        log.info("러닝 복구 완료: userId={}, runId={}", subject, publicId);
+        return response;
     }
 
     private Run find(long userId, String id, boolean includeDeleted) {
@@ -145,14 +169,14 @@ public class RunServiceImpl implements RunService {
     }
 
     private RunCursor decode(String cursor) {
-        if (cursor.length() > 256) throw BusinessException.invalid("커서 형식이 올바르지 않습니다.");
+        if (cursor.length() > MAX_CURSOR_LENGTH) throw BusinessException.invalid("커서 형식이 올바르지 않습니다.");
         try {
             String[] values = new String(Base64.getUrlDecoder().decode(cursor), StandardCharsets.UTF_8).split("\\|", -1);
             if (values.length != 2) throw new IllegalArgumentException();
             long id = Long.parseLong(values[1]);
             if (id <= 0) throw new IllegalArgumentException();
             return new RunCursor(Instant.parse(values[0]), id);
-        } catch (IllegalArgumentException | java.time.DateTimeException ex) {
+        } catch (IllegalArgumentException | DateTimeException ex) {
             throw BusinessException.invalid("커서 형식이 올바르지 않습니다.");
         }
     }

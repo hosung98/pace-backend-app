@@ -12,6 +12,7 @@ import java.security.SecureRandom;
 import java.time.*;
 import java.time.temporal.TemporalAdjusters;
 import java.util.*;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -145,7 +146,7 @@ public class CrewServiceImpl implements CrewService {
         User user = access.user(subject, true);
         String normalized = code.trim().toUpperCase(Locale.ROOT);
         Crew crew = crews.findByInviteCode(normalized).orElseThrow(() ->
-                new BusinessException(org.springframework.http.HttpStatus.NOT_FOUND, "INVITE_CODE_NOT_FOUND",
+                new BusinessException(HttpStatus.NOT_FOUND, "INVITE_CODE_NOT_FOUND",
                         "초대 코드가 올바르지 않습니다."));
         Crew locked = crews.lockByPublicId(crew.getPublicId()).orElseThrow(BusinessException::missing);
         Optional<CrewMember> existing = members.findByUserId(user.getId());
@@ -302,7 +303,7 @@ public class CrewServiceImpl implements CrewService {
 
     private void requireLeader(Crew crew, long userId) {
         if (!crew.getLeaderUserId().equals(userId)) {
-            throw new BusinessException(org.springframework.http.HttpStatus.FORBIDDEN, "FORBIDDEN",
+            throw new BusinessException(HttpStatus.FORBIDDEN, "FORBIDDEN",
                     "크루장만 이 작업을 할 수 있습니다.");
         }
     }
