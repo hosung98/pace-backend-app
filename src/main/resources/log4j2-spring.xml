@@ -3,14 +3,28 @@
     <Appenders>
         <Console name="Console" target="SYSTEM_OUT">
             <PatternLayout
-                    pattern="%d{yyyy-MM-dd'T'HH:mm:ss.SSSXXX} %-5level [%t] %logger{36} requestId=%X{requestId} userId=%X{userId} - %msg%n%throwable"/>
+                    pattern="%d{HH:mm:ss.SSS} %-5level [%t] requestId=%X{requestId:-na} userId=%X{userId:-na} %logger{24} - %msg%n%throwable"/>
         </Console>
     </Appenders>
 
     <Loggers>
-        <Logger name="org.springframework.web" level="INFO"/>
-        <Logger name="org.hibernate.SQL" level="WARN"/>
-        <Logger name="org.hibernate.orm.jdbc.bind" level="WARN"/>
+        <!-- 1. 로컬(local) 또는 개발(dev) -->
+        <SpringProfile name="local | dev">
+            <Logger name="org.springframework.web" level="DEBUG"/>
+            <Logger name="org.hibernate.SQL" level="DEBUG"/>
+            <Logger name="org.hibernate.orm.jdbc.bind" level="TRACE"/>
+            <Logger name="com.pace" level="DEBUG"/>
+        </SpringProfile>
+
+        <!-- 2. 운영(prod) 환경-->
+        <SpringProfile name="prod">
+            <Logger name="org.springframework.web" level="INFO"/>
+            <Logger name="org.hibernate.SQL" level="WARN"/>
+            <Logger name="org.hibernate.orm.jdbc.bind" level="WARN"/>
+            <Logger name="com.pace" level="INFO"/>
+        </SpringProfile>
+
+        <!-- 공통 Root 로거 -->
         <Root level="INFO">
             <AppenderRef ref="Console"/>
         </Root>

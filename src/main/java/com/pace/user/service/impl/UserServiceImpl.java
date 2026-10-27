@@ -1,18 +1,27 @@
 package com.pace.user.service.impl;
 
 import com.fasterxml.jackson.databind.JsonNode;
-import com.pace.auth.repository.TokenRepository;
-import com.pace.auth.repository.ProviderRepository;
 import com.pace.auth.provider.AppleGrantRevoker;
+import com.pace.auth.repository.ProviderRepository;
+import com.pace.auth.repository.TokenRepository;
 import com.pace.common.exception.BusinessException;
-import com.pace.run.repository.RunRepository;
-import com.pace.user.dto.*;
-import com.pace.user.entity.*;
-import com.pace.user.repository.*;
-import com.pace.user.service.*;
 import com.pace.common.util.TimeZones;
+import com.pace.run.repository.RunRepository;
+import com.pace.user.dto.DeleteAccountRequest;
+import com.pace.user.dto.MeResponse;
+import com.pace.user.dto.NotificationSettingsResponse;
+import com.pace.user.dto.SettingsResponse;
+import com.pace.user.dto.UpdateNotificationRequest;
+import com.pace.user.dto.UpdateProfileRequest;
+import com.pace.user.dto.UpdateSettingsRequest;
+import com.pace.user.dto.UserCountsResponse;
+import com.pace.user.entity.User;
+import com.pace.user.entity.UserSettings;
+import com.pace.user.repository.SettingsRepository;
+import com.pace.user.repository.UserRepository;
+import com.pace.user.service.UserAccess;
+import com.pace.user.service.UserService;
 import java.time.LocalTime;
-import java.util.List;
 import lombok.RequiredArgsConstructor;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -20,6 +29,10 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+/**
+ * 사용자 프로필/설정/탈퇴 처리의 트랜잭션 경계를 담당하는 서비스입니다.
+ * 민감한 탈퇴 플로우는 Apple 재인증과 토큰 폐기까지 함께 수행합니다.
+ */
 @Service
 @RequiredArgsConstructor
 public class UserServiceImpl implements UserService {
@@ -36,6 +49,7 @@ public class UserServiceImpl implements UserService {
     private final ProviderRepository providers;
     private final AppleGrantRevoker appleRevoker;
 
+    /** 현재 인증 사용자의 프로필 기본 정보를 조회합니다. */
     @Transactional(readOnly = true)
     public MeResponse me(String subject) {
         log.debug("내 정보 조회 진입: userId={}", subject);
@@ -44,6 +58,7 @@ public class UserServiceImpl implements UserService {
         return me;
     }
 
+    /** 닉네임/핸들/소개/공개 범위를 부분 수정합니다. */
     @Transactional
     public MeResponse update(String subject, UpdateProfileRequest request) {
         log.debug("프로필 수정 진입: userId={}", subject);
@@ -71,6 +86,7 @@ public class UserServiceImpl implements UserService {
         return response;
     }
 
+    /** 현재 인증 사용자의 설정 정보를 조회합니다. */
     @Transactional(readOnly = true)
     public SettingsResponse settings(String subject) {
         log.debug("설정 조회 진입: userId={}", subject);
@@ -80,6 +96,7 @@ public class UserServiceImpl implements UserService {
         return response;
     }
 
+    /** 목표·단위·시간대·알림 설정을 부분 수정합니다. */
     @Transactional
     public SettingsResponse updateSettings(String subject, UpdateSettingsRequest request) {
         log.debug("설정 수정 진입: userId={}", subject);
@@ -110,6 +127,7 @@ public class UserServiceImpl implements UserService {
         return response;
     }
 
+    /** 계정을 deleting 상태로 전환하고 활성 토큰을 폐기합니다. */
     @Transactional
     public void delete(String subject, DeleteAccountRequest request) {
         log.warn("회원 탈퇴 진입: userId={}", subject);

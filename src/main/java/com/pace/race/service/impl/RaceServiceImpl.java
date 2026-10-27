@@ -1,20 +1,36 @@
 package com.pace.race.service.impl;
 
 import com.pace.common.exception.BusinessException;
-import com.pace.race.dto.*;
-import com.pace.race.entity.*;
-import com.pace.race.repository.*;
+import com.pace.race.dto.CreateRaceRequest;
+import com.pace.race.dto.RaceDetailResponse;
+import com.pace.race.dto.RaceIdResponse;
+import com.pace.race.dto.RaceParticipantResponse;
+import com.pace.race.dto.RaceSummaryResponse;
+import com.pace.race.entity.Race;
+import com.pace.race.entity.RaceParticipant;
+import com.pace.race.repository.RaceParticipantRepository;
+import com.pace.race.repository.RaceRepository;
 import com.pace.race.service.RaceService;
 import com.pace.user.entity.User;
 import com.pace.user.repository.UserRepository;
 import com.pace.user.service.UserAccess;
 import java.security.SecureRandom;
-import java.time.*;
-import java.util.*;
+import java.time.Duration;
+import java.time.Instant;
+import java.util.Comparator;
+import java.util.List;
+import java.util.Locale;
+import java.util.Objects;
+import java.util.Optional;
+import java.util.Set;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+/**
+ * 대결 생성/참가/취소와 모집 마감 확정 로직을 담당합니다.
+ * 마감 처리 시점에는 행 잠금으로 동시성 충돌을 제어합니다.
+ */
 @Service
 public class RaceServiceImpl implements RaceService {
     private static final String ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -34,6 +50,7 @@ public class RaceServiceImpl implements RaceService {
         this.participants = participants;
     }
 
+    /** 공개 대결 또는 내 대결 목록을 조건에 맞게 조회합니다. */
     @Override
     @Transactional
     public List<RaceSummaryResponse> list(String subject, String scope, Integer distanceMeters,
@@ -75,6 +92,7 @@ public class RaceServiceImpl implements RaceService {
                 .toList();
     }
 
+    /** 단건 대결 상세와 참가자 목록을 조회합니다. */
     @Override
     @Transactional
     public RaceDetailResponse detail(String subject, String raceId) {
@@ -99,6 +117,7 @@ public class RaceServiceImpl implements RaceService {
                 people, host ? race.getInviteCode() : null);
     }
 
+    /** 새 대결을 생성하고 방장을 첫 참가자로 등록합니다. */
     @Override
     @Transactional
     public RaceIdResponse create(String subject, CreateRaceRequest request) {
@@ -113,6 +132,7 @@ public class RaceServiceImpl implements RaceService {
         return new RaceIdResponse(race.getPublicId());
     }
 
+    /** 방장이 모집 중인 대결의 정보를 수정합니다. */
     @Override
     @Transactional
     public void update(String subject, String raceId, CreateRaceRequest request) {
@@ -146,6 +166,7 @@ public class RaceServiceImpl implements RaceService {
                 visibility, inviteCode);
     }
 
+    /** 공개 대결에 일반 참가를 처리합니다. */
     @Override
     @Transactional
     public void join(String subject, String raceId) {
@@ -157,6 +178,7 @@ public class RaceServiceImpl implements RaceService {
         participants.save(new RaceParticipant(race.getId(), user.getId()));
     }
 
+    /** 참가자 탈퇴를 처리하며 방장은 leave를 허용하지 않습니다. */
     @Override
     @Transactional
     public void leave(String subject, String raceId) {
@@ -170,6 +192,7 @@ public class RaceServiceImpl implements RaceService {
         participants.remove(race.getId(), user.getId());
     }
 
+    /** 초대 코드로 비공개 대결 참가를 처리합니다. */
     @Override
     @Transactional
     public RaceIdResponse joinByCode(String subject, String code) {
@@ -187,6 +210,7 @@ public class RaceServiceImpl implements RaceService {
         return new RaceIdResponse(locked.getPublicId());
     }
 
+    /** 방장이 모집 중 대결을 취소합니다. */
     @Override
     @Transactional
     public void cancel(String subject, String raceId) {
@@ -200,6 +224,7 @@ public class RaceServiceImpl implements RaceService {
         race.cancel();
     }
 
+    /** 마감 시각을 지난 대결의 인원 스냅샷/취소 여부를 확정합니다. */
     @Override
     @Transactional
     public void processDeadlines() {

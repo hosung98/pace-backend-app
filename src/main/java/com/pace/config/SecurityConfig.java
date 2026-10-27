@@ -68,8 +68,9 @@ public class SecurityConfig {
     JwtDecoder jwtDecoder(SecretKeySpec key) {
         var decoder = NimbusJwtDecoder.withSecretKey(key).macAlgorithm(MacAlgorithm.HS256).build();
         OAuth2TokenValidator<Jwt> requiredClaims = jwt -> {
+            List<String> audiences = jwt.getAudience();
             return jwt.getSubject() != null && !jwt.getSubject().isBlank()
-                    && jwt.getAudience().contains("pace-app") && jwt.getExpiresAt() != null
+                    && audiences != null && audiences.contains("pace-app") && jwt.getExpiresAt() != null
                     ? OAuth2TokenValidatorResult.success()
                     : OAuth2TokenValidatorResult.failure(new OAuth2Error("invalid_token", "유효하지 않은 토큰입니다.", null));
         };

@@ -6,16 +6,18 @@ import com.pace.common.exception.BusinessException;
 import java.io.IOException;
 import java.net.URI;
 import java.net.URLEncoder;
-import java.net.http.*;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Map;
 import java.util.stream.Collectors;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
 
+/** Apple 재인증 코드를 교환하고 원격 revoke API를 호출해 계정 연결을 해제합니다. */
 @Component
 public class AppleGrantRevoker {
     private final String clientId;
@@ -27,7 +29,7 @@ public class AppleGrantRevoker {
     private final HttpClient client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(3))
             .followRedirects(HttpClient.Redirect.NEVER).build();
 
-    @Autowired
+    /** 환경 변수 기반 Apple revoke 설정으로 런타임 인스턴스를 생성합니다. */
     public AppleGrantRevoker(@Value("${pace.apple-client-id}") String clientId,
                              @Value("${pace.apple-client-secret}") String clientSecret,
                              AppleVerifier verifier, ObjectMapper json) {
@@ -46,6 +48,7 @@ public class AppleGrantRevoker {
         this.revokeUri = revokeUri;
     }
 
+    /** Apple 계정 재인증 결과가 현재 사용자와 일치할 때만 revoke를 진행합니다. */
     public void revoke(String code, String nonce, String expectedSubject) {
         if (clientId.isBlank() || clientSecret.isBlank()) {
             throw new BusinessException(HttpStatus.SERVICE_UNAVAILABLE, "APPLE_REVOCATION_NOT_CONFIGURED",

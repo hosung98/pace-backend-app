@@ -136,6 +136,10 @@ Gradle Wrapper와 `database/` SQL, 비밀 값 없는 공용 프로필 YAML은 �
    기존 DB도 비우거나 `schema.sql`을 다시 실행하지 말고 커뮤니티 스키마만 추가합니다.
 4. 애플리케이션 계정에 테이블·시퀀스 사용 권한을 부여합니다.
 
+기존 DB에는 [database/scheduler-lock-schema.sql](database/scheduler-lock-schema.sql)을
+배포 전에 한 번 실행하세요. 멀티 파드 환경에서 스케줄 작업 중복 실행을 막는 `shedlock`
+테이블을 추가합니다.
+
 기존 커뮤니티 DB는 [database/crew-region-schema.sql](database/crew-region-schema.sql)을 서버 배포 전에 실행합니다.
 시/도 전체(`sigungu: null`)를 허용하도록 CHECK만 완화하며 기존 행은 유지합니다.
 기존 이름은 `crews_check`를 전제로 하므로
@@ -157,6 +161,45 @@ Gradle Wrapper와 `database/` SQL, 비밀 값 없는 공용 프로필 YAML은 �
 서버는 테이블을 생성하거나 변경하지 않습니다. `ddl-auto: validate`로 전체 스키마를
 검증하고 SQL 자동 초기화도 끕니다. SQL은 런타임 classpath 밖에 있습니다.
 운영에서는 DDL 실행 계정과 애플리케이션 계정의 권한을 분리하는 것을 권장합니다.
+
+## 멀티 파드 스케줄링 중복 실행 방지
+
+현재 스케줄 작업은 `RaceDeadlineScheduler`, `AccountCleanupScheduler` 두 개입니다.
+파드를 여러 개로 늘리면 기본 `@Scheduled`는 파드마다 각각 실행되어 다음 문제가 생길 수 있습니다.
+
+- 대결 마감 처리 쿼리/잠금 경쟁 증가로 DB 부하 확대
+- 탈퇴 데이터 삭제 작업의 중복 실행으로 불필요한 트랜잭션 반복
+- 작업 시간 초과 시 다음 주기와 겹치며 지연 누적
+
+이 프로젝트는 ShedLock(JDBC Provider)을 적용해 **동일 시점에 한 파드만 실행**되도록 구성했습니다.
+
+- `@SchedulerLock`으로 작업별 lock name/유지 시간을 명시
+- `SchedulerLockConfig`에서 `usingDbTime()` 사용(노드 간 시계 오차 완화)
+- 기본 조정 값
+  - `PACE_RACE_DEADLINE_LOCK_AT_MOST_FOR` (기본 `PT1M`)
+  - `PACE_RACE_DEADLINE_LOCK_AT_LEAST_FOR` (기본 `PT0S`)
+  - `PACE_ACCOUNT_CLEANUP_LOCK_AT_MOST_FOR` (기본 `PT2M`)
+  - `PACE_ACCOUNT_CLEANUP_LOCK_AT_LEAST_FOR` (기본 `PT0S`)
+
+운영에서는 `lockAtMostFor`를 **평균 실행시간보다 충분히 크게** 잡고, 장애 복구 지연을 줄이려면
+작업 주기보다 지나치게 길게 두지 않는 것을 권장합니다.
+
+## 로그 가독성 개선 팁
+
+- 콘솔 패턴을 `requestId`, `userId`, 짧은 logger 이름 중심으로 단순화했습니다.
+- `hibernate.format_sql=true`로 SQL을 줄바꿈 형태로 출력해 읽기 쉽게 했습니다.
+- 로컬/개발에서 바인딩 파라미터가 필요할 때만 `org.hibernate.orm.jdbc.bind=TRACE`를 유지하고,
+  평상시에는 `DEBUG`/`WARN`으로 낮춰 노이즈를 줄이세요.
+- 대용량 SQL/파라미터를 더 정돈하려면 P6Spy를 dev 프로필 전용으로 도입해 한 줄 포맷
+  커스터마이징을 적용하는 방법이 실무에서 자주 사용됩니다.
+
+## 보안·리팩토링 점검 메모
+
+- 로컬 프로필의 하드코딩 DB 비밀번호를 제거하고, 기본 DB URL을 localhost로 변경했습니다.
+- `@Autowired` 필드/생성자 표기를 제거하고 생성자 주입으로 통일했습니다.
+- 주요 서비스/스케줄러/보안 컴포넌트에 Javadoc을 추가해 역할과 책임을 명시했습니다.
+- JWT audience 검증에서 null 방어를 추가해 예외 누락 가능성을 줄였습니다.
+- 현재 SQL은 JPA named parameter와 MyBatis `#{}` 바인딩을 사용해 SQL Injection 위험이 낮습니다.
 
 ## 환경별 접속 설정
 

@@ -15,6 +15,7 @@ spring:
       hibernate:
         jdbc:
           time_zone: UTC
+        format_sql: true
   sql:
     init:
       mode: never
@@ -52,6 +53,13 @@ pace:
   apple-client-id: ${APPLE_CLIENT_ID:com.hocompany.pace}
   apple-client-secret: ${APPLE_CLIENT_SECRET:}
   cors-origins: ${CORS_ORIGINS:}
+  scheduler:
+    race-deadline:
+      lock-at-most-for: ${PACE_RACE_DEADLINE_LOCK_AT_MOST_FOR:PT1M}
+      lock-at-least-for: ${PACE_RACE_DEADLINE_LOCK_AT_LEAST_FOR:PT0S}
+    account-cleanup:
+      lock-at-most-for: ${PACE_ACCOUNT_CLEANUP_LOCK_AT_MOST_FOR:PT2M}
+      lock-at-least-for: ${PACE_ACCOUNT_CLEANUP_LOCK_AT_LEAST_FOR:PT0S}
 mybatis:
   mapper-locations: classpath:mapper/*.xml
   configuration:

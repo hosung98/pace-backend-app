@@ -1,17 +1,22 @@
 package com.pace.auth.service.impl;
 
 import com.github.f4b6a3.ulid.UlidCreator;
+import com.pace.auth.dto.AuthTokenResponse;
+import com.pace.auth.dto.LoginUserResponse;
+import com.pace.auth.entity.AuthProvider;
+import com.pace.auth.entity.RefreshToken;
+import com.pace.auth.mapper.AuthLockMapper;
+import com.pace.auth.provider.AppleVerifier;
+import com.pace.auth.provider.GoogleVerifier;
+import com.pace.auth.repository.ProviderRepository;
+import com.pace.auth.repository.TokenRepository;
+import com.pace.auth.service.AuthService;
 import com.pace.common.exception.BusinessException;
 import com.pace.common.util.TokenHash;
-import com.pace.user.entity.*;
-import com.pace.user.repository.*;
-import com.pace.auth.dto.*;
-import com.pace.auth.entity.*;
-import com.pace.auth.mapper.AuthLockMapper;
-import com.pace.auth.provider.GoogleVerifier;
-import com.pace.auth.provider.AppleVerifier;
-import com.pace.auth.repository.*;
-import com.pace.auth.service.AuthService;
+import com.pace.user.entity.User;
+import com.pace.user.entity.UserSettings;
+import com.pace.user.repository.SettingsRepository;
+import com.pace.user.repository.UserRepository;
 import java.security.SecureRandom;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
@@ -25,6 +30,10 @@ import org.springframework.security.oauth2.jwt.*;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionTemplate;
 
+/**
+ * 소셜 로그인/토큰 회전/로그아웃을 한곳에서 관리하는 인증 서비스 구현체입니다.
+ * 사용자 생성과 토큰 발급을 같은 트랜잭션 경계로 묶어 일관성을 보장합니다.
+ */
 @Service
 @RequiredArgsConstructor
 public class AuthServiceImpl implements AuthService {
@@ -48,6 +57,7 @@ public class AuthServiceImpl implements AuthService {
     private final AppleVerifier apple;
     private final SecureRandom random = new SecureRandom();
 
+    /** Google ID 토큰 검증 후 가입/로그인을 수행합니다. */
     public AuthTokenResponse login(String idToken) {
         log.debug("인증 진입: provider=google");
         var identity = google.verify(idToken);
@@ -56,6 +66,7 @@ public class AuthServiceImpl implements AuthService {
         return response;
     }
 
+    /** Apple ID 토큰 + nonce 검증 후 가입/로그인을 수행합니다. */
     public AuthTokenResponse loginApple(String idToken, String nonce, String nickname) {
         log.debug("인증 진입: provider=apple, hasNickname={}", nickname != null);
         if (nickname != null && (nickname.strip().length() < NICKNAME_MIN_LENGTH || nickname.length() > NICKNAME_MAX_LENGTH)) {
@@ -95,6 +106,7 @@ public class AuthServiceImpl implements AuthService {
         });
     }
 
+    /** 리프레시 토큰을 회전하며 재사용이 감지되면 같은 family를 즉시 폐기합니다. */
     public AuthTokenResponse refresh(String rawToken) {
         log.debug("토큰 재발급 진입");
         AuthTokenResponse result = tx.execute(status -> {
@@ -119,6 +131,7 @@ public class AuthServiceImpl implements AuthService {
         return result;
     }
 
+    /** 전달된 갱신 토큰 family 전체를 폐기해 세션을 로그아웃 처리합니다. */
     public void logout(String publicId, String rawToken) {
         log.debug("로그아웃 진입: userId={}", publicId);
         tx.executeWithoutResult(status -> {
@@ -129,12 +142,14 @@ public class AuthServiceImpl implements AuthService {
         log.info("로그아웃 완료: userId={}", publicId);
     }
 
+    /** 활성 사용자만 인증 성공으로 인정합니다. */
     private User activeUser(long id) {
         User user = users.lockById(id).orElseThrow(BusinessException::unauthorized);
         if (!user.getStatus().equals("active")) throw BusinessException.unauthorized();
         return user;
     }
 
+    /** 액세스/리프레시 토큰을 새로 발급하고 해시된 리프레시 토큰만 저장합니다. */
     private AuthTokenResponse issue(User user, String family, boolean isNew) {
         Instant now = Instant.now();
         var claims = JwtClaimsSet.builder().issuer("pace-api").subject(user.getPublicId())
